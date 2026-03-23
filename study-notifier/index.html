@@ -1,0 +1,908 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Study</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:rgba(18,18,22,.6);
+  --border:rgba(255,255,255,.10);
+  --shine:rgba(255,255,255,.055);
+  --accent:#7c6cf8;
+  --accent-glow:rgba(124,108,248,.35);
+  --green:#34c759;--red:#ff453a;
+  --text:rgba(255,255,255,.92);--dim:rgba(255,255,255,.45);--dimmer:rgba(255,255,255,.25);
+  --blur:blur(48px) saturate(180%);
+  --r-pill:42px;--r-card:22px;
+}
+html,body{width:100%;height:100%;background:transparent;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden;user-select:none;color:var(--text)}
+
+/* ── glass ── */
+.glass{
+  background:var(--bg);
+  backdrop-filter:var(--blur);-webkit-backdrop-filter:var(--blur);
+  border:.5px solid var(--border);
+  box-shadow:0 0 0 .5px var(--shine) inset,0 10px 48px rgba(0,0,0,.55),0 2px 6px rgba(0,0,0,.3)
+}
+
+/* ── shell / layout ── */
+#shell{position:fixed;inset:0;display:flex;align-items:flex-end;justify-content:flex-end}
+
+/* ═══ PILL ═══════════════════════════════════════════════════════════════════ */
+#pill{
+  width:400px;height:84px;border-radius:var(--r-pill);
+  display:flex;align-items:center;gap:12px;padding:0 14px 0 20px;
+  -webkit-app-region:drag;
+}
+#pill-icon{font-size:22px;flex-shrink:0;filter:drop-shadow(0 0 6px var(--accent-glow))}
+#pill-q{flex:1;font-size:13.5px;font-weight:500;line-height:1.35;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+#pill-prog{
+  position:absolute;bottom:10px;left:20px;right:20px;height:2px;
+  background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden
+}
+#pill-prog-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .4s ease}
+#pill-btns{display:flex;gap:6px;flex-shrink:0;-webkit-app-region:no-drag}
+.pbtn{height:32px;padding:0 13px;border:none;border-radius:16px;cursor:pointer;
+  font-size:12px;font-weight:600;font-family:inherit;transition:opacity .1s,transform .1s}
+.pbtn:active{transform:scale(.94);opacity:.85}
+.pbtn-primary{background:var(--accent);color:#fff;box-shadow:0 0 14px var(--accent-glow)}
+.pbtn-ghost{background:rgba(255,255,255,.08);color:var(--dim);border:.5px solid var(--border)}
+
+/* ═══ MAIN WINDOW ════════════════════════════════════════════════════════════ */
+#main{
+  width:460px;border-radius:var(--r-card);
+  height:100%;max-height:100%;
+  min-height:0;
+  display:none;flex-direction:column;overflow:hidden;
+  -webkit-app-region:drag;
+}
+
+/* titlebar */
+#titlebar{
+  height:44px;flex-shrink:0;display:flex;align-items:center;gap:8px;
+  padding:0 14px;-webkit-app-region:drag;border-bottom:.5px solid var(--border)
+}
+#title-left{display:flex;gap:6px;align-items:center;-webkit-app-region:no-drag}
+#title-center{flex:1;text-align:center;font-size:11.5px;font-weight:600;
+  color:var(--dim);letter-spacing:.07em;text-transform:uppercase}
+#title-right{display:flex;gap:6px;align-items:center;-webkit-app-region:no-drag}
+
+.icon-btn{
+  width:30px;height:30px;border:none;border-radius:50%;cursor:pointer;
+  background:rgba(255,255,255,.06);color:var(--dim);font-size:13px;
+  display:flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s
+}
+.icon-btn:hover{background:rgba(255,255,255,.13);color:var(--text)}
+.icon-btn.active{background:var(--accent-glow);color:var(--accent)}
+
+/* tab pills */
+.tab{
+  height:26px;padding:0 12px;border:none;border-radius:13px;cursor:pointer;
+  font-size:11.5px;font-weight:600;font-family:inherit;
+  background:transparent;color:var(--dim);transition:background .15s,color .15s
+}
+.tab.active{background:rgba(255,255,255,.10);color:var(--text)}
+
+/* ═══ CARD VIEW ══════════════════════════════════════════════════════════════ */
+#card-view{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;-webkit-app-region:no-drag}
+
+/* session progress strip */
+#session-strip{
+  display:flex;align-items:center;gap:8px;padding:10px 20px 0;
+  flex-shrink:0
+}
+.sess-dot{
+  width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.15);
+  transition:background .3s
+}
+.sess-dot.done{background:var(--green)}
+.sess-dot.current{background:var(--accent);box-shadow:0 0 6px var(--accent-glow)}
+#session-label{font-size:11px;color:var(--dim);margin-left:4px}
+
+/* stats row */
+#stats-row{
+  display:flex;gap:0;padding:10px 16px 8px;flex-shrink:0;
+  border-bottom:.5px solid rgba(255,255,255,.06)
+}
+.stat{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px}
+.stat-n{font-size:16px;font-weight:700}
+.stat-l{font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+.sdiv{width:.5px;background:var(--border);margin:4px 0;align-self:stretch}
+
+/* card body */
+#card-body{flex:1;padding:16px 22px 18px;display:flex;flex-direction:column;overflow-y:auto}
+.type-badge{
+  display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:10px;
+  font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+  margin-bottom:12px;align-self:flex-start
+}
+.type-badge.qa{background:rgba(124,108,248,.18);color:#a78bfa}
+.type-badge.concept{background:rgba(255,159,10,.15);color:#ff9f0a}
+#question{font-size:17px;font-weight:600;line-height:1.45;flex:1;margin-bottom:16px}
+#btn-reveal{
+  width:100%;height:46px;border:.5px solid var(--border);border-radius:14px;
+  background:rgba(255,255,255,.06);color:var(--text);font-size:13.5px;font-weight:600;
+  font-family:inherit;cursor:pointer;transition:background .15s,transform .1s
+}
+#btn-reveal:hover{background:rgba(255,255,255,.11)}
+#btn-reveal:active{transform:scale(.98)}
+
+/* answer area */
+#answer-area{display:none;flex-direction:column;gap:14px;animation:fadeUp .2s ease}
+.adivider{width:100%;height:.5px;background:linear-gradient(90deg,transparent,var(--border),transparent)}
+#answer-text{font-size:14px;line-height:1.65;color:rgba(255,255,255,.78);white-space:pre-wrap}
+#verdict-row{display:flex;gap:10px}
+.vbtn{
+  flex:1;height:46px;border:none;border-radius:14px;cursor:pointer;
+  font-size:13.5px;font-weight:700;font-family:inherit;
+  transition:opacity .1s,transform .1s,box-shadow .1s
+}
+.vbtn:active{transform:scale(.96);opacity:.85}
+#btn-wrong{background:linear-gradient(135deg,#ff6961,#ff453a);color:#fff;box-shadow:0 0 18px rgba(255,69,58,.3)}
+#btn-right{background:linear-gradient(135deg,#30d158,#34c759);color:#fff;box-shadow:0 0 18px rgba(52,199,89,.3)}
+
+/* secondary action row (after reveal) */
+#secondary-row{display:flex;gap:8px;justify-content:center}
+.sec-btn{
+  height:28px;padding:0 12px;border:.5px solid var(--border);border-radius:14px;
+  background:rgba(255,255,255,.05);color:var(--dim);
+  font-size:11.5px;font-weight:600;font-family:inherit;cursor:pointer;
+  transition:background .15s,color .15s
+}
+.sec-btn:hover{background:rgba(255,255,255,.11);color:var(--text)}
+
+/* edit overlay */
+#edit-overlay{
+  display:none;position:absolute;inset:0;z-index:50;
+  background:rgba(12,12,16,.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  border-radius:var(--r-card);padding:24px;flex-direction:column;gap:16px
+}
+#edit-overlay.open{display:flex}
+.edit-label{font-size:11.5px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
+.edit-field{
+  width:100%;background:rgba(255,255,255,.07);border:.5px solid var(--border);border-radius:10px;
+  color:var(--text);font-size:13px;font-family:inherit;padding:10px 12px;
+  resize:none;outline:none;line-height:1.5
+}
+.edit-field:focus{border-color:var(--accent);background:rgba(124,108,248,.08)}
+.edit-row{display:flex;gap:8px;margin-top:4px}
+.edit-action{
+  flex:1;height:38px;border:none;border-radius:10px;cursor:pointer;
+  font-size:13px;font-weight:600;font-family:inherit;transition:opacity .1s
+}
+.edit-action:active{opacity:.8}
+#edit-accept{background:var(--accent);color:#fff}
+#edit-discard{background:rgba(255,255,255,.08);color:var(--dim);border:.5px solid var(--border)}
+#edit-spinner{display:none;align-items:center;justify-content:center;gap:10px;
+  font-size:13px;color:var(--dim)}
+.spin{width:18px;height:18px;border:2px solid rgba(255,255,255,.15);
+  border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite}
+
+/* ═══ CATALOG VIEW ═══════════════════════════════════════════════════════════ */
+#catalog-view{
+  flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden;
+  -webkit-app-region:no-drag
+}
+#catalog-header{
+  padding:14px 18px 12px;flex-shrink:0;
+  border-bottom:.5px solid rgba(255,255,255,.06)
+}
+#catalog-kicker{
+  font-size:10px;font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);margin-bottom:4px
+}
+#catalog-title{font-size:15px;font-weight:650;letter-spacing:-.02em;color:var(--text)}
+
+#catalog-summary{
+  display:flex;align-items:stretch;gap:10px;padding:12px 18px 0;flex-shrink:0;
+  flex-wrap:wrap
+}
+.summary-chip{
+  flex:1;min-width:72px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  padding:10px 8px;border-radius:14px;
+  background:rgba(255,255,255,.05);border:.5px solid rgba(255,255,255,.08);
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset
+}
+.summary-n{font-size:20px;font-weight:700;line-height:1.1;letter-spacing:-.02em}
+.summary-l{font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em;font-weight:600}
+
+#accuracy-panel{
+  flex:1.4;min-width:140px;display:flex;flex-direction:column;justify-content:center;gap:8px;
+  padding:10px 12px;border-radius:14px;
+  background:rgba(255,255,255,.04);border:.5px solid rgba(255,255,255,.08)
+}
+#accuracy-bar-wrap{display:flex;flex-direction:column;gap:6px}
+#accuracy-label{font-size:11px;font-weight:500;color:var(--dim);text-align:left}
+#accuracy-bar-track{
+  height:6px;min-height:6px;background:rgba(255,255,255,.08);border-radius:4px;overflow:hidden
+}
+#accuracy-bar-fill{
+  height:100%;background:linear-gradient(90deg,var(--accent),#a78bfa);border-radius:4px;transition:width .5s ease
+}
+
+#catalog-search-wrap{
+  margin:12px 18px 0;display:flex;align-items:center;gap:10px;
+  padding:0 14px;height:40px;
+  background:rgba(255,255,255,.06);border:.5px solid var(--border);border-radius:14px;
+  transition:border-color .15s,background .15s,box-shadow .15s
+}
+#catalog-search-wrap:focus-within{
+  border-color:rgba(124,108,248,.45);background:rgba(124,108,248,.07);
+  box-shadow:0 0 0 3px rgba(124,108,248,.12)
+}
+#catalog-search-icon{font-size:14px;opacity:.45;flex-shrink:0;line-height:1}
+#catalog-search{
+  flex:1;min-width:0;height:100%;padding:0;border:none;background:transparent;
+  color:var(--text);font-size:13px;font-family:inherit;outline:none
+}
+#catalog-search::placeholder{color:var(--dimmer)}
+
+#catalog-list{
+  flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;
+  padding:10px 14px 14px;display:flex;flex-direction:column;gap:8px
+}
+#catalog-list::-webkit-scrollbar{width:5px}
+#catalog-list::-webkit-scrollbar-track{background:transparent}
+#catalog-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:3px}
+
+.catalog-empty{
+  padding:28px 16px;text-align:center;border-radius:16px;
+  border:.5px dashed rgba(255,255,255,.12);background:rgba(255,255,255,.03)
+}
+.catalog-empty-title{font-size:13px;font-weight:600;color:var(--text);margin-bottom:6px}
+.catalog-empty-hint{font-size:12px;line-height:1.45;color:var(--dim);max-width:240px;margin:0 auto}
+
+.catalog-item{
+  display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:16px;
+  background:rgba(255,255,255,.04);border:.5px solid rgba(255,255,255,.06);
+  cursor:pointer;-webkit-app-region:no-drag;
+  transition:background .15s,border-color .15s,box-shadow .15s
+}
+.catalog-item:hover{
+  background:rgba(255,255,255,.08);border-color:var(--border);
+  box-shadow:0 4px 20px rgba(0,0,0,.2)
+}
+.ci-type{
+  flex-shrink:0;display:inline-flex;align-items:center;padding:2px 8px;border-radius:8px;
+  font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;margin-top:1px
+}
+.ci-type.qa{background:rgba(124,108,248,.18);color:#a78bfa}
+.ci-type.concept{background:rgba(255,159,10,.15);color:#ff9f0a}
+.ci-body{flex:1;min-width:0;overflow:hidden}
+.ci-q{
+  font-size:13px;font-weight:550;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  margin-bottom:6px
+}
+.ci-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ci-got{font-size:10.5px;font-weight:600;color:var(--green)}
+.ci-miss{font-size:10.5px;font-weight:600;color:var(--red)}
+.ci-acc{font-size:10.5px;font-weight:600;color:var(--dim)}
+.ci-mini-bar{flex:1;height:3px;min-width:48px;max-width:72px;background:rgba(255,255,255,.08);border-radius:2px;overflow:hidden}
+.ci-mini-fill{height:100%;border-radius:2px;transition:width .3s}
+.ci-due{font-size:10.5px;font-weight:600;color:var(--dim);flex-shrink:0;opacity:.9}
+
+/* ═══ CHAT VIEW ══════════════════════════════════════════════════════════════ */
+#chat-view{flex:1;min-height:0;display:none;flex-direction:column;overflow:hidden;-webkit-app-region:no-drag}
+#chat-context{
+  padding:12px 18px;border-bottom:.5px solid rgba(255,255,255,.06);flex-shrink:0
+}
+#chat-ctx-q{font-size:12px;color:var(--dim);line-height:1.4;
+  overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+#chat-messages{
+  flex:1;overflow-y:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px
+}
+#chat-messages::-webkit-scrollbar{width:4px}
+#chat-messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px}
+.msg{max-width:90%;padding:10px 14px;border-radius:16px;font-size:13px;line-height:1.55}
+.msg.user{
+  align-self:flex-end;background:var(--accent);color:#fff;border-bottom-right-radius:5px
+}
+.msg.ai{
+  align-self:flex-start;background:rgba(255,255,255,.08);
+  border:.5px solid var(--border);border-bottom-left-radius:5px
+}
+.msg.thinking{color:var(--dim);font-style:italic}
+#chat-input-row{
+  display:flex;gap:8px;padding:10px 14px 14px;flex-shrink:0;
+  border-top:.5px solid rgba(255,255,255,.06)
+}
+#chat-input{
+  flex:1;background:rgba(255,255,255,.07);border:.5px solid var(--border);border-radius:14px;
+  color:var(--text);font-size:13px;font-family:inherit;padding:9px 14px;
+  outline:none;resize:none;height:38px;line-height:1.4
+}
+#chat-input:focus{border-color:rgba(124,108,248,.5)}
+#btn-chat-send{
+  width:38px;height:38px;border:none;border-radius:50%;
+  background:var(--accent);color:#fff;font-size:16px;cursor:pointer;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+  transition:opacity .1s,transform .1s
+}
+#btn-chat-send:active{transform:scale(.92);opacity:.85}
+
+/* ═══ SETTINGS PANEL ═════════════════════════════════════════════════════════ */
+#settings-panel{
+  display:none;padding:14px 18px 16px;flex-direction:column;gap:12px;flex-shrink:0;
+  border-top:.5px solid var(--border)
+}
+#settings-panel.open{display:flex}
+.srow{display:flex;align-items:center;gap:10px}
+.slabel{font-size:12.5px;color:var(--dim);flex-shrink:0;width:110px}
+.srow input[type=range]{flex:1;accent-color:var(--accent);cursor:pointer}
+.sval{font-size:12.5px;font-weight:600;min-width:38px;text-align:right;color:var(--text)}
+#btn-save-settings{
+  width:100%;height:36px;border:none;border-radius:10px;
+  background:var(--accent);color:#fff;font-size:13px;font-weight:600;
+  font-family:inherit;cursor:pointer;margin-top:2px
+}
+
+/* ═══ ANIMATIONS ═════════════════════════════════════════════════════════════ */
+@keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes shake{
+  0%,100%{transform:translateX(0)}15%{transform:translateX(-6px)}
+  30%{transform:translateX(6px)}45%{transform:translateX(-4px)}
+  60%{transform:translateX(4px)}75%{transform:translateX(-2px)}90%{transform:translateX(2px)}
+}
+.shaking{animation:shake .4s ease}
+
+/* ═══ MODE VISIBILITY ════════════════════════════════════════════════════════ */
+body.pill-mode  #pill{display:flex} body.pill-mode  #main{display:none}
+body.card-mode  #pill{display:none} body.card-mode  #main{display:flex} body.card-mode #card-view{display:flex}
+body.card-mode  #catalog-view,
+body.card-mode  #chat-view{display:none!important}
+body.catalog-mode #pill{display:none} body.catalog-mode #main{display:flex} body.catalog-mode #catalog-view{display:flex}
+body.catalog-mode #card-view,
+body.catalog-mode #chat-view{display:none!important}
+body.chat-mode  #pill{display:none} body.chat-mode  #main{display:flex} body.chat-mode #chat-view{display:flex}
+body.chat-mode  #card-view,
+body.chat-mode  #catalog-view{display:none!important}
+</style>
+</head>
+<body class="pill-mode">
+<div id="shell">
+
+  <!-- ══ PILL ══════════════════════════════════════════════════════════════ -->
+  <div id="pill" class="glass" style="position:relative">
+    <span id="pill-icon">🧠</span>
+    <span id="pill-q">Loading…</span>
+    <div id="pill-btns">
+      <button class="pbtn pbtn-ghost" onclick="snooze()">Later</button>
+      <button class="pbtn pbtn-primary" onclick="expand()">Answer →</button>
+    </div>
+    <div id="pill-prog"><div id="pill-prog-fill" style="width:0%"></div></div>
+  </div>
+
+  <!-- ══ MAIN WINDOW ═══════════════════════════════════════════════════════ -->
+  <div id="main" class="glass" style="position:relative">
+
+    <!-- titlebar -->
+    <div id="titlebar">
+      <div id="title-left">
+        <button class="icon-btn" id="btn-back" onclick="backToCard()" style="display:none" title="Back">←</button>
+        <button class="tab active" id="tab-cards" onclick="switchTab('card')">Cards</button>
+        <button class="tab" id="tab-catalog" onclick="switchTab('catalog')">Catalog</button>
+      </div>
+      <span id="title-center">Study</span>
+      <div id="title-right">
+        <button class="icon-btn" id="btn-gear" onclick="toggleSettings()" title="Settings">⚙</button>
+        <button class="icon-btn" onclick="dismiss()" title="Close">✕</button>
+      </div>
+    </div>
+
+    <!-- ── CARD VIEW ──────────────────────────────────────────────────── -->
+    <div id="card-view">
+      <!-- session dots -->
+      <div id="session-strip">
+        <span id="session-label"></span>
+      </div>
+
+      <!-- stats -->
+      <div id="stats-row">
+        <div class="stat"><span class="stat-n" id="s-due">—</span><span class="stat-l">Due</span></div>
+        <div class="sdiv"></div>
+        <div class="stat"><span class="stat-n" id="s-seen">—</span><span class="stat-l">Seen</span></div>
+        <div class="sdiv"></div>
+        <div class="stat"><span class="stat-n" id="s-total">—</span><span class="stat-l">Total</span></div>
+        <div class="sdiv"></div>
+        <div class="stat"><span class="stat-n" id="s-got" style="color:var(--green)">—</span><span class="stat-l">Got</span></div>
+        <div class="sdiv"></div>
+        <div class="stat"><span class="stat-n" id="s-miss" style="color:var(--red)">—</span><span class="stat-l">Missed</span></div>
+      </div>
+
+      <!-- card body -->
+      <div id="card-body">
+        <span class="type-badge qa" id="type-badge">Q&A</span>
+        <div id="question"></div>
+        <button id="btn-reveal" onclick="reveal()">Show Answer</button>
+        <div id="answer-area">
+          <div class="adivider"></div>
+          <div id="answer-text"></div>
+          <div id="verdict-row">
+            <button class="vbtn" id="btn-wrong" onclick="vote(false)">✗ Missed it</button>
+            <button class="vbtn" id="btn-right" onclick="vote(true)">✓ Got it</button>
+          </div>
+          <div id="secondary-row">
+            <button class="sec-btn" onclick="editCard()">✦ Edit with AI</button>
+            <button class="sec-btn" onclick="talkAbout()">💬 Talk more</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- edit overlay (inside card view) -->
+      <div id="edit-overlay">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:13px;font-weight:600">Edit with AI</span>
+          <button class="icon-btn" onclick="closeEdit()">✕</button>
+        </div>
+        <div id="edit-spinner"><div class="spin"></div>Improving card…</div>
+        <div id="edit-fields" style="display:none;flex-direction:column;gap:12px">
+          <div>
+            <div class="edit-label" style="margin-bottom:6px">Question</div>
+            <textarea class="edit-field" id="edit-front" rows="3"></textarea>
+          </div>
+          <div>
+            <div class="edit-label" style="margin-bottom:6px">Answer</div>
+            <textarea class="edit-field" id="edit-back" rows="4"></textarea>
+          </div>
+          <div class="edit-row">
+            <button class="edit-action" id="edit-discard" onclick="closeEdit()">Discard</button>
+            <button class="edit-action" id="edit-accept" onclick="acceptEdit()">Accept</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── CATALOG VIEW ───────────────────────────────────────────────── -->
+    <div id="catalog-view">
+      <div id="catalog-header">
+        <div id="catalog-kicker">Library</div>
+        <div id="catalog-title">Your cards</div>
+      </div>
+      <div id="catalog-summary">
+        <div class="summary-chip">
+          <span class="summary-n" id="cat-total">—</span>
+          <span class="summary-l">Cards</span>
+        </div>
+        <div class="summary-chip">
+          <span class="summary-n" id="cat-due">—</span>
+          <span class="summary-l">Due</span>
+        </div>
+        <div class="summary-chip">
+          <span class="summary-n" id="cat-streak" style="color:var(--accent)">—</span>
+          <span class="summary-l">Streak</span>
+        </div>
+        <div id="accuracy-panel">
+          <div id="accuracy-bar-wrap">
+            <div id="accuracy-label">—% accuracy</div>
+            <div id="accuracy-bar-track"><div id="accuracy-bar-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+      <div id="catalog-search-wrap">
+        <span id="catalog-search-icon" aria-hidden="true">⌕</span>
+        <input id="catalog-search" placeholder="Search cards…" oninput="filterCatalog(this.value)" autocomplete="off">
+      </div>
+      <div id="catalog-list"></div>
+    </div>
+
+    <!-- ── CHAT VIEW ──────────────────────────────────────────────────── -->
+    <div id="chat-view">
+      <div id="chat-context">
+        <div class="edit-label" style="margin-bottom:4px">Discussing</div>
+        <div id="chat-ctx-q"></div>
+      </div>
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" placeholder="Ask a follow-up…" onkeydown="chatKeydown(event)">
+        <button id="btn-chat-send" onclick="chatSend()">↑</button>
+      </div>
+    </div>
+
+    <!-- settings panel (shared, appears below active view) -->
+    <div id="settings-panel">
+      <div class="srow">
+        <span class="slabel">Notify every</span>
+        <input type="range" id="r-interval" min="5" max="120" step="5" value="20"
+               oninput="document.getElementById('v-interval').textContent=this.value+'m'">
+        <span class="sval" id="v-interval">20m</span>
+      </div>
+      <div class="srow">
+        <span class="slabel">Cards / session</span>
+        <input type="range" id="r-cps" min="1" max="10" step="1" value="3"
+               oninput="document.getElementById('v-cps').textContent=this.value">
+        <span class="sval" id="v-cps">3</span>
+      </div>
+      <div class="srow">
+        <span class="slabel">Annoyance</span>
+        <input type="range" id="r-annoy" min="0" max="3" step="1" value="2"
+               oninput="document.getElementById('v-annoy').textContent=['Off','Low','Med','High'][this.value]">
+        <span class="sval" id="v-annoy">Med</span>
+      </div>
+      <div class="srow">
+        <span class="slabel">Launch at login</span>
+        <input type="range" id="r-login" min="0" max="1" step="1" value="1"
+               oninput="document.getElementById('v-login').textContent=this.value==='1'||this.value==1?'On':'Off'">
+        <span class="sval" id="v-login">On</span>
+      </div>
+      <div class="srow" style="flex-direction:column;align-items:stretch;gap:5px">
+        <span class="slabel" style="width:auto">Anthropic API key</span>
+        <input type="password" id="s-apikey" placeholder="sk-ant-…"
+          style="width:100%;background:rgba(255,255,255,.07);border:.5px solid var(--border);
+                 border-radius:10px;color:var(--text);font-size:12px;font-family:inherit;
+                 padding:8px 12px;outline:none;"
+          onfocus="this.type='text'" onblur="this.type='password'">
+      </div>
+      <button id="btn-save-settings" onclick="saveSettings()">Save settings</button>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /shell -->
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────
+let currentCard   = null
+let editImproved  = null   // holds pending AI edit
+let catalogData   = []
+let chatHistory   = []     // [{role, content}]
+let chatCard      = null
+
+// ── Unified view handler (works for both pull and push) ───────────────────
+function handleView(view) {
+  if (!view || view.type === 'hidden') return
+
+  if (view.type === 'pill') {
+    currentCard = view.card
+    document.body.className = 'pill-mode'
+    document.getElementById('pill-q').textContent = view.card.front
+    const pct = view.sessionTotal > 0 ? (view.sessionDone / view.sessionTotal) * 100 : 0
+    document.getElementById('pill-prog-fill').style.width = pct + '%'
+  }
+
+  else if (view.type === 'card') {
+    currentCard = view.card
+    document.body.className = 'card-mode'
+    renderCard(view.card, view.stats, view.sessionDone, view.sessionTotal)
+    setActiveTab('card')
+    document.getElementById('btn-back').style.display = 'none'
+  }
+
+  else if (view.type === 'catalog') {
+    catalogData = view.catalog
+    document.body.className = 'catalog-mode'
+    renderCatalog(view.catalog, view.stats)
+    setActiveTab('catalog')
+    document.getElementById('btn-back').style.display = 'none'
+  }
+
+  else if (view.type === 'chat') {
+    chatCard = view.card
+    chatHistory = []
+    document.body.className = 'chat-mode'
+    document.getElementById('chat-ctx-q').textContent = view.card.front
+    document.getElementById('chat-messages').innerHTML = ''
+    document.getElementById('btn-back').style.display = 'flex'
+    appendMsg('ai', 'thinking', 'Thinking…')
+    window.api.chatSend(
+      [{ role: 'user', content: `Let's dig into this. Give me a brief framing of the core concept, then ask me one probing question to check my understanding.` }],
+      view.card
+    ).then(reply => {
+      document.getElementById('chat-messages').querySelector('.thinking')?.remove()
+      appendMsg('ai', 'ai', reply)
+      chatHistory.push({ role: 'assistant', content: reply })
+    }).catch(() => {
+      document.getElementById('chat-messages').querySelector('.thinking')?.remove()
+      appendMsg('ai', 'ai', 'Set ANTHROPIC_API_KEY to enable AI chat.')
+    })
+  }
+}
+
+// Listen for push updates from main process
+window.api.onView(handleView)
+
+// Listen for annoyance shakes
+window.api.onAnnoy(() => {
+  const el = document.getElementById('pill')
+  el.classList.remove('shaking'); void el.offsetWidth; el.classList.add('shaking')
+  el.addEventListener('animationend', () => el.classList.remove('shaking'), { once: true })
+})
+
+// ── Card rendering ─────────────────────────────────────────────────────────
+function renderCard(card, stats, done, total) {
+  // session dots
+  const strip = document.getElementById('session-strip')
+  strip.innerHTML = ''
+  if (total > 1) {
+    for (let i = 0; i < total; i++) {
+      const d = document.createElement('div')
+      d.className = 'sess-dot' + (i < done ? ' done' : i === done ? ' current' : '')
+      strip.appendChild(d)
+    }
+    const lbl = document.createElement('span')
+    lbl.id = 'session-label'
+    lbl.textContent = `${done + 1} of ${total}`
+    strip.appendChild(lbl)
+  }
+
+  // stats
+  document.getElementById('s-due').textContent   = stats.due
+  document.getElementById('s-seen').textContent  = stats.seen
+  document.getElementById('s-total').textContent = stats.total
+  document.getElementById('s-got').textContent   = stats.totalGot  || 0
+  document.getElementById('s-miss').textContent  = stats.totalMiss || 0
+
+  // card content
+  const badge = document.getElementById('type-badge')
+  badge.textContent = card.type === 'concept' ? 'Concept' : 'Q&A'
+  badge.className = `type-badge ${card.type}`
+  document.getElementById('question').textContent = card.front
+  document.getElementById('answer-text').textContent = card.back
+  document.getElementById('btn-reveal').style.display = ''
+  document.getElementById('answer-area').style.display = 'none'
+  closeEdit()
+}
+
+// ── Actions ────────────────────────────────────────────────────────────────
+function expand()     { window.api.expand() }
+function dismiss()    { window.api.dismiss() }
+function snooze()     { window.api.snooze(5) }
+function backToCard() { window.api.backToCard() }
+
+function reveal() {
+  document.getElementById('btn-reveal').style.display = 'none'
+  document.getElementById('answer-area').style.display = 'flex'
+}
+
+function vote(correct) {
+  if (!currentCard) return
+  window.api.answer(currentCard.id, correct)
+}
+
+function switchTab(tab) {
+  if (tab === 'catalog') {
+    window.api.openCatalog()
+  } else {
+    window.api.expand()
+  }
+}
+
+function setActiveTab(tab) {
+  document.getElementById('tab-cards').classList.toggle('active', tab === 'card')
+  document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog')
+}
+
+// ── Settings ───────────────────────────────────────────────────────────────
+function toggleSettings() {
+  const p = document.getElementById('settings-panel')
+  p.classList.toggle('open')
+  document.getElementById('btn-gear').classList.toggle('active', p.classList.contains('open'))
+}
+
+function saveSettings() {
+  const apiKey = document.getElementById('s-apikey').value.trim()
+  window.api.saveSettings({
+    intervalMinutes: parseInt(document.getElementById('r-interval').value),
+    cardsPerSession: parseInt(document.getElementById('r-cps').value),
+    annoyanceLevel:  parseInt(document.getElementById('r-annoy').value),
+    launchAtLogin:   parseInt(document.getElementById('r-login').value) === 1,
+    ...(apiKey && { anthropicApiKey: apiKey }),
+  })
+  document.getElementById('settings-panel').classList.remove('open')
+  document.getElementById('btn-gear').classList.remove('active')
+}
+
+window.api.getSettings().then(s => {
+  document.getElementById('r-interval').value = s.intervalMinutes
+  document.getElementById('v-interval').textContent = s.intervalMinutes + 'm'
+  document.getElementById('r-cps').value = s.cardsPerSession || 3
+  document.getElementById('v-cps').textContent = s.cardsPerSession || 3
+  document.getElementById('r-annoy').value = s.annoyanceLevel
+  document.getElementById('v-annoy').textContent = ['Off','Low','Med','High'][s.annoyanceLevel] || 'Med'
+  const login = s.launchAtLogin !== false ? 1 : 0
+  document.getElementById('r-login').value = login
+  document.getElementById('v-login').textContent = login ? 'On' : 'Off'
+  if (s.anthropicApiKey) document.getElementById('s-apikey').placeholder = 'sk-ant-… (saved)'
+})
+
+// ── Edit with AI ───────────────────────────────────────────────────────────
+function editCard() {
+  if (!currentCard) return
+  const overlay = document.getElementById('edit-overlay')
+  overlay.classList.add('open')
+  document.getElementById('edit-spinner').style.display = 'flex'
+  document.getElementById('edit-fields').style.display = 'none'
+
+  window.api.editCard(currentCard).then(improved => {
+    editImproved = improved
+    document.getElementById('edit-spinner').style.display = 'none'
+    document.getElementById('edit-fields').style.display = 'flex'
+    document.getElementById('edit-front').value = improved.front
+    document.getElementById('edit-back').value  = improved.back
+  }).catch(err => {
+    closeEdit()
+    alert('AI edit failed: ' + (err.message || 'unknown error'))
+  })
+}
+
+function closeEdit() {
+  document.getElementById('edit-overlay').classList.remove('open')
+  document.getElementById('edit-spinner').style.display = 'none'
+  document.getElementById('edit-fields').style.display = 'none'
+  editImproved = null
+}
+
+function acceptEdit() {
+  // update the in-memory currentCard with textarea values (already saved by main)
+  if (currentCard) {
+    currentCard.front = document.getElementById('edit-front').value
+    currentCard.back  = document.getElementById('edit-back').value
+    document.getElementById('question').textContent     = currentCard.front
+    document.getElementById('answer-text').textContent  = currentCard.back
+  }
+  closeEdit()
+}
+
+// ── Talk more ──────────────────────────────────────────────────────────────
+function talkAbout() {
+  if (!currentCard) return
+  window.api.openChat(currentCard)
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────
+function appendMsg(id, cls, text) {
+  const msgs = document.getElementById('chat-messages')
+  const div  = document.createElement('div')
+  div.className = 'msg ' + cls
+  if (id) div.id = id
+  div.textContent = text
+  msgs.appendChild(div)
+  msgs.scrollTop = msgs.scrollHeight
+}
+
+function chatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend() }
+}
+
+async function chatSend() {
+  const input = document.getElementById('chat-input')
+  const text  = input.value.trim()
+  if (!text || !chatCard) return
+  input.value = ''
+
+  appendMsg(null, 'user', text)
+  chatHistory.push({ role: 'user', content: text })
+
+  const thinkId = 'think-' + Date.now()
+  appendMsg(thinkId, 'ai thinking', '…')
+
+  try {
+    const reply = await window.api.chatSend(chatHistory, chatCard)
+    document.getElementById(thinkId)?.remove()
+    appendMsg(null, 'ai', reply)
+    chatHistory.push({ role: 'assistant', content: reply })
+  } catch {
+    document.getElementById(thinkId)?.remove()
+    appendMsg(null, 'ai', 'Error — is ANTHROPIC_API_KEY set?')
+  }
+}
+
+// ── Catalog ────────────────────────────────────────────────────────────────
+function renderCatalog(data, stats) {
+  // summary bar
+  document.getElementById('cat-total').textContent  = stats.total
+  document.getElementById('cat-due').textContent    = stats.due
+  document.getElementById('cat-streak').textContent = stats.streak
+  const totalAns = (stats.totalGot || 0) + (stats.totalMiss || 0)
+  const acc      = totalAns > 0 ? Math.round((stats.totalGot / totalAns) * 100) : 0
+  document.getElementById('accuracy-label').textContent = acc + '% accuracy'
+  document.getElementById('accuracy-bar-fill').style.width = acc + '%'
+
+  renderCatalogList(data)
+}
+
+function renderCatalogList(data) {
+  const list = document.getElementById('catalog-list')
+  list.innerHTML = ''
+  if (!data.length) {
+    const hasAnyCards = catalogData.length > 0
+    const empty = document.createElement('div')
+    empty.className = 'catalog-empty'
+    const title = document.createElement('p')
+    title.className = 'catalog-empty-title'
+    title.textContent = hasAnyCards ? 'No matching cards' : 'No cards yet'
+    const hint = document.createElement('p')
+    hint.className = 'catalog-empty-hint'
+    hint.textContent = hasAnyCards ? 'Try a different search term.' : 'Add rows to study-cards in your research folder, then relaunch.'
+    empty.appendChild(title)
+    empty.appendChild(hint)
+    list.appendChild(empty)
+    return
+  }
+  data.forEach(item => {
+    const accColor = item.accuracy === null ? 'var(--dim)'
+      : item.accuracy >= 80 ? 'var(--green)'
+      : item.accuracy >= 50 ? '#ff9f0a'
+      : 'var(--red)'
+
+    const el = document.createElement('div')
+    el.className = 'catalog-item'
+
+    const typeSpan = document.createElement('span')
+    const isConcept = item.type === 'concept'
+    typeSpan.className = 'ci-type ' + (isConcept ? 'concept' : 'qa')
+    typeSpan.textContent = isConcept ? 'Concept' : 'Q&A'
+
+    const body = document.createElement('div')
+    body.className = 'ci-body'
+    const q = document.createElement('div')
+    q.className = 'ci-q'
+    q.textContent = item.front
+    const meta = document.createElement('div')
+    meta.className = 'ci-meta'
+    const got = document.createElement('span')
+    got.className = 'ci-got'
+    got.textContent = '✓' + item.got
+    const miss = document.createElement('span')
+    miss.className = 'ci-miss'
+    miss.textContent = '✗' + item.miss
+    const bar = document.createElement('div')
+    bar.className = 'ci-mini-bar'
+    const fill = document.createElement('div')
+    fill.className = 'ci-mini-fill'
+    fill.style.width = (item.accuracy ?? 0) + '%'
+    fill.style.background = accColor
+    bar.appendChild(fill)
+    const spacer = document.createElement('span')
+    spacer.style.flex = '1'
+    spacer.style.minWidth = '4px'
+    const due = document.createElement('span')
+    due.className = 'ci-due'
+    due.textContent = item.dueLabel
+    meta.appendChild(got)
+    meta.appendChild(miss)
+    meta.appendChild(bar)
+    if (item.accuracy !== null) {
+      const acc = document.createElement('span')
+      acc.className = 'ci-acc'
+      acc.textContent = item.accuracy + '%'
+      meta.appendChild(acc)
+    }
+    meta.appendChild(spacer)
+    meta.appendChild(due)
+    body.appendChild(q)
+    body.appendChild(meta)
+    el.appendChild(typeSpan)
+    el.appendChild(body)
+    el.addEventListener('click', () => window.api.openCardFromCatalog(item.id))
+    el.tabIndex = 0
+    el.setAttribute('role', 'button')
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault()
+        window.api.openCardFromCatalog(item.id)
+      }
+    })
+    list.appendChild(el)
+  })
+}
+
+function filterCatalog(query) {
+  const q = query.toLowerCase()
+  const filtered = q ? catalogData.filter(c => c.front.toLowerCase().includes(q)) : catalogData
+  renderCatalogList(filtered)
+}
+
+// ── PULL initial view on load ─────────────────────────────────────────────
+// This is the critical fix: by the time this line runs, all functions above
+// are defined and all DOM elements exist. We ask main for whatever view it
+// already set (e.g. 'catalog' on direct launch) and render it.
+window.api.getView().then(handleView)
+</script>
+</body>
+</html>
