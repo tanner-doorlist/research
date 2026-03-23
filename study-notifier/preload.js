@@ -22,8 +22,11 @@ contextBridge.exposeInMainWorld('api', {
   getCatalog:  ()              => ipcRenderer.invoke('catalog:get'),
 
   // ── AI ──
-  editCard:    (card)          => ipcRenderer.invoke('edit-card', { card }),
+  editCardChat:(messages, card)=> ipcRenderer.invoke('edit-card-chat', { card, messages }),
+  applyCardEdit:(cardId, front, back)=> ipcRenderer.invoke('apply-card-edit', { cardId, front, back }),
   chatSend:    (messages, card)=> ipcRenderer.invoke('chat-send', { messages, card }),
+  autoTagCards: ()              => ipcRenderer.invoke('auto-tag-cards'),
+  deleteCard:  (cardId)        => ipcRenderer.invoke('delete-card', { cardId }),
 
   // ── View state (pull + push) ──
   getView:     ()   => ipcRenderer.invoke('get-view'),

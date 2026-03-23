@@ -2,7 +2,16 @@ const { app, BrowserWindow, Notification, ipcMain, screen, nativeTheme } = requi
 const path    = require('path')
 const fs      = require('fs')
 const os      = require('os')
+const crypto  = require('crypto')
 const Anthropic = require('@anthropic-ai/sdk')
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+function isUuid(s) {
+  return typeof s === 'string' && UUID_RE.test(s.trim())
+}
+function newId() {
+  return crypto.randomUUID()
+}
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const RESEARCH_DIR  = path.join(os.homedir(), 'research')
@@ -12,7 +21,13 @@ const STATE_FILE    = path.join(RESEARCH_DIR, 'study-cards', '.card_state.json')
 const SETTINGS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.settings.json')
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
-const DEFAULTS = { intervalMinutes: 20, annoyanceLevel: 2, cardsPerSession: 3, launchAtLogin: true }
+const DEFAULTS = {
+  intervalMinutes: 20,
+  annoyanceLevel: 2,
+  cardsPerSession: 3,
+  launchAtLogin: true,
+  categoryClusterK: 8,
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let win            = null
@@ -46,31 +61,125 @@ function getAI() {
 }
 
 // ── File I/O ──────────────────────────────────────────────────────────────────
+function migrateCardStateIfNeeded(mapOldToNew) {
+  if (!mapOldToNew || !Object.keys(mapOldToNew).length) return
+  for (const [oldId, newId] of Object.entries(mapOldToNew)) {
+    if (cardState[oldId] !== undefined) {
+      cardState[newId] = cardState[oldId]
+      delete cardState[oldId]
+    }
+  }
+  saveState()
+}
+
+function migrateQaTsv() {
+  if (!fs.existsSync(CARDS_FILE)) return
+  const lines = fs.readFileSync(CARDS_FILE, 'utf8').split('\n').filter(l => l.trim().length > 0)
+  if (lines.length === 0) return
+  const mapOldToNew = {}
+  let start = 0
+  const h0 = lines[0].split('\t')[0]
+  if (h0.toLowerCase() === 'front' || h0.toLowerCase() === 'id') start = 1
+  const out = ['id\tfront\tback\ttags']
+  let legacyIdx = 0
+  let changed = false
+  for (let i = start; i < lines.length; i++) {
+    const parts = lines[i].split('\t')
+    if (parts.length >= 1 && isUuid(parts[0])) {
+      out.push(lines[i])
+      continue
+    }
+    changed = true
+    const id = newId()
+    mapOldToNew[`qa_${legacyIdx}`] = id
+    legacyIdx++
+    out.push([id, parts[0] || '', parts[1] || '', (parts[2] || '').trim()].join('\t'))
+  }
+  if (changed) {
+    fs.writeFileSync(CARDS_FILE, out.join('\n') + '\n')
+    migrateCardStateIfNeeded(mapOldToNew)
+  }
+}
+
+function migrateConceptTsv() {
+  if (!fs.existsSync(CONCEPT_FILE)) return
+  const lines = fs.readFileSync(CONCEPT_FILE, 'utf8').split('\n').filter(l => l.trim().length > 0)
+  if (lines.length === 0) return
+  const mapOldToNew = {}
+  let start = 0
+  const h0 = lines[0].split('\t')[0]
+  if (h0.toLowerCase() === 'concept' || h0.toLowerCase() === 'id') start = 1
+  const out = ['id\tconcept\twhen\thow\texample']
+  let legacyIdx = 0
+  let changed = false
+  for (let i = start; i < lines.length; i++) {
+    const parts = lines[i].split('\t')
+    if (parts.length >= 1 && isUuid(parts[0])) {
+      out.push(lines[i])
+      continue
+    }
+    changed = true
+    const id = newId()
+    mapOldToNew[`concept_${legacyIdx}`] = id
+    legacyIdx++
+    out.push([id, parts[0] || '', parts[1] || '', parts[2] || '', parts[3] || ''].join('\t'))
+  }
+  if (changed) {
+    fs.writeFileSync(CONCEPT_FILE, out.join('\n') + '\n')
+    migrateCardStateIfNeeded(mapOldToNew)
+  }
+}
+
+function runMigrations() {
+  migrateQaTsv()
+  migrateConceptTsv()
+}
+
 function loadCards() {
+  runMigrations()
   const all = []
 
   if (fs.existsSync(CARDS_FILE)) {
     const lines = fs.readFileSync(CARDS_FILE, 'utf8').trim().split('\n').slice(1)
-    lines.forEach((line, i) => {
-      const [front, back, tags] = line.split('\t')
-      if (front?.trim()) all.push({
-        id: `qa_${i}`, type: 'qa',
+    lines.forEach((line) => {
+      const parts = line.split('\t')
+      if (parts.length < 4) return
+      const id = parts[0]
+      const front = parts[1]
+      const back = parts[2]
+      const tags = (parts[3] || '').split(' ').filter(Boolean)
+      if (!front?.trim() || !isUuid(id)) return
+      all.push({
+        id, type: 'qa',
         front: front.trim(), back: (back || '').trim(),
-        tags: (tags || '').split(' ').filter(Boolean)
+        tags,
       })
     })
   }
 
   if (fs.existsSync(CONCEPT_FILE)) {
     const lines = fs.readFileSync(CONCEPT_FILE, 'utf8').trim().split('\n').slice(1)
-    lines.forEach((line, i) => {
-      const [concept, when, how, example] = line.split('\t')
-      if (concept?.trim()) all.push({
-        id: `concept_${i}`, type: 'concept',
+    lines.forEach((line) => {
+      const parts = line.split('\t')
+      if (parts.length < 5) return
+      const id = parts[0]
+      const concept = parts[1]
+      const when = (parts[2] || '').trim()
+      const how = (parts[3] || '').trim()
+      const example = (parts[4] || '').trim()
+      if (!concept?.trim() || !isUuid(id)) return
+      const backParts = [
+        when && `**When:** ${when}`,
+        how && `**How:** ${how}`,
+        example && `**Example:** ${example}`,
+      ].filter(Boolean)
+      const back = backParts.length ? backParts.join('\n\n') : how
+      all.push({
+        id, type: 'concept',
         front: concept.trim(),
-        back: [when && `**When:** ${when}`, how && `**How:** ${how}`, example && `**Example:** ${example}`]
-          .filter(Boolean).join('\n\n'),
-        tags: ['concept']
+        when, how, example,
+        back,
+        tags: ['concept'],
       })
     })
   }
@@ -102,18 +211,64 @@ function saveCardEdit(card, newFront, newBack) {
   const file  = isQA ? CARDS_FILE : CONCEPT_FILE
   if (!fs.existsSync(file)) return false
 
-  const lines  = fs.readFileSync(file, 'utf8').split('\n')
-  const rowIdx = parseInt(card.id.split('_')[1]) + 1
-  if (rowIdx >= lines.length) return false
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split('\t')
+    if (parts[0] !== card.id) continue
+    if (isQA) {
+      lines[i] = [card.id, newFront, newBack, parts[3] || ''].join('\t')
+    } else {
+      lines[i] = [card.id, newFront, '', newBack, ''].join('\t')
+    }
+    fs.writeFileSync(file, lines.join('\n'))
+    const c = cards.find(x => x.id === card.id)
+    if (c) {
+      c.front = newFront
+      c.back = newBack
+      if (!isQA) { c.when = ''; c.how = newBack; c.example = '' }
+    }
+    return true
+  }
+  return false
+}
 
-  const parts = lines[rowIdx].split('\t')
-  parts[0] = newFront
-  parts[1] = newBack
-  lines[rowIdx] = parts.join('\t')
-  fs.writeFileSync(file, lines.join('\n'))
+function saveQaTagsForRow(cardId, tagsStr) {
+  if (!fs.existsSync(CARDS_FILE)) return false
+  const lines = fs.readFileSync(CARDS_FILE, 'utf8').split('\n')
+  for (let i = 1; i < lines.length; i++) {
+    const parts = lines[i].split('\t')
+    if (parts[0] !== cardId) continue
+    lines[i] = [parts[0], parts[1], parts[2], tagsStr].join('\t')
+    fs.writeFileSync(CARDS_FILE, lines.join('\n'))
+    const c = cards.find(x => x.id === cardId)
+    if (c && c.type === 'qa') c.tags = tagsStr.split(' ').filter(Boolean)
+    return true
+  }
+  return false
+}
 
-  const c = cards.find(c => c.id === card.id)
-  if (c) { c.front = newFront; c.back = newBack }
+function deleteCardById(cardId) {
+  const card = cards.find(c => c.id === cardId)
+  if (!card) return false
+  const file = card.type === 'qa' ? CARDS_FILE : CONCEPT_FILE
+  if (!fs.existsSync(file)) return false
+  const lines = fs.readFileSync(file, 'utf8').split('\n')
+  const out = [lines[0]]
+  let removed = false
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].split('\t')[0] === cardId) {
+      removed = true
+      continue
+    }
+    out.push(lines[i])
+  }
+  if (!removed) return false
+  fs.writeFileSync(file, out.join('\n'))
+  delete cardState[cardId]
+  saveState()
+  cards = loadCards()
+  if (currentCard?.id === cardId) currentCard = null
+  sessionQueue = sessionQueue.filter(c => c.id !== cardId)
   return true
 }
 
@@ -195,7 +350,10 @@ function getCatalog() {
         dueLabel = days === 1 ? 'Tomorrow' : `${days}d`
       }
     }
-    return { id: card.id, type: card.type, front: card.front, got, miss, accuracy, dueLabel, streak: s?.streak || 0 }
+    return {
+      id: card.id, type: card.type, front: card.front, got, miss, accuracy, dueLabel, streak: s?.streak || 0,
+      tags: card.tags || [],
+    }
   })
 }
 
@@ -387,8 +545,8 @@ function scheduleNext(overrideMinutes) {
 }
 
 function fireNotification() {
-  cards     = loadCards()
   cardState = loadState()
+  cards     = loadCards()
   if (!cards.length) { scheduleNext(); return }
 
   sessionQueue = buildSessionQueue()
@@ -462,28 +620,197 @@ ipcMain.handle('settings:get', () => settings)
 ipcMain.handle('stats:get',    () => getStats())
 ipcMain.handle('catalog:get',  () => getCatalog())
 
-// ── Edit card with AI ─────────────────────────────────────────────────────────
-ipcMain.handle('edit-card', async (_, { card }) => {
+// ── OpenAI embeddings + auto-tag ──────────────────────────────────────────────
+function getOpenAIKey() {
+  const key = settings.openaiApiKey || process.env.OPENAI_API_KEY
+  if (!key) throw new Error('No OpenAI API key — add it in settings or OPENAI_API_KEY')
+  return key
+}
+
+async function openaiEmbeddings(texts, key) {
+  const out = []
+  for (let i = 0; i < texts.length; i += 64) {
+    const chunk = texts.slice(i, i + 64)
+    const res = await fetch('https://api.openai.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model: 'text-embedding-3-small', input: chunk }),
+    })
+    if (!res.ok) throw new Error(`OpenAI embeddings: ${await res.text()}`)
+    const j = await res.json()
+    const sorted = j.data.slice().sort((a, b) => a.index - b.index)
+    for (const row of sorted) {
+      const e = row.embedding
+      const v = new Float32Array(e.length)
+      let s = 0
+      for (let d = 0; d < e.length; d++) {
+        v[d] = e[d]
+        s += e[d] * e[d]
+      }
+      s = Math.sqrt(s)
+      if (s > 0) for (let d = 0; d < e.length; d++) v[d] /= s
+      out.push(v)
+    }
+  }
+  return out
+}
+
+function kmeansCosine(points, k, maxIter = 40) {
+  const n = points.length
+  const dim = points[0].length
+  if (n === 0) return []
+  if (k <= 1 || n <= k) return new Array(n).fill(0)
+
+  const centroids = []
+  const picked = new Set()
+  while (centroids.length < k && picked.size < n) {
+    const j = Math.floor(Math.random() * n)
+    if (picked.has(j)) continue
+    picked.add(j)
+    centroids.push(Float32Array.from(points[j]))
+  }
+  const assignments = new Array(n).fill(0)
+
+  function assignStep() {
+    for (let i = 0; i < n; i++) {
+      let best = 0
+      let bestDot = -Infinity
+      for (let c = 0; c < k; c++) {
+        let dot = 0
+        for (let d = 0; d < dim; d++) dot += points[i][d] * centroids[c][d]
+        if (dot > bestDot) {
+          bestDot = dot
+          best = c
+        }
+      }
+      assignments[i] = best
+    }
+  }
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    assignStep()
+    const counts = new Array(k).fill(0)
+    const sums = centroids.map(() => new Float32Array(dim))
+    for (let i = 0; i < n; i++) {
+      const c = assignments[i]
+      counts[c]++
+      for (let d = 0; d < dim; d++) sums[c][d] += points[i][d]
+    }
+    for (let c = 0; c < k; c++) {
+      if (counts[c] === 0) continue
+      for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c]
+      let norm = 0
+      for (let d = 0; d < dim; d++) norm += centroids[c][d] * centroids[c][d]
+      norm = Math.sqrt(norm)
+      if (norm > 0) for (let d = 0; d < dim; d++) centroids[c][d] /= norm
+    }
+  }
+  return assignments
+}
+
+async function labelClustersWithClaude(k, samples) {
   const ai = getAI()
   const msg = await ai.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 512,
+    max_tokens: 1200,
     messages: [{
       role: 'user',
-      content: `Improve this flashcard. Make the question more specific and testable, the answer more concise and memorable. Add a short concrete example in the answer if there isn't one. Return ONLY valid JSON, no markdown.
+      content: `Each cluster has sample flashcard fronts. Assign ONE short category tag per cluster: lowercase, a-z 0-9 hyphen only, max 24 characters, no spaces.
 
-Current card:
-Q: ${card.front}
-A: ${card.back}
+${JSON.stringify(samples, null, 2)}
 
-Return: {"front":"...", "back":"..."}`
-    }]
+Return ONLY valid JSON: {"tags":["tag0","tag1",...]} with exactly ${k} strings in cluster order 0..${k - 1}.`,
+    }],
   })
   let raw = msg.content[0].text.trim()
   if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
-  const improved = JSON.parse(raw)
-  saveCardEdit(card, improved.front, improved.back)
-  return improved
+  const parsed = JSON.parse(raw)
+  if (!parsed.tags || parsed.tags.length !== k) throw new Error('Unexpected tags from model')
+  return parsed.tags
+}
+
+async function runAutoTagAll() {
+  const key = getOpenAIKey()
+  const qa = cards.filter(c => c.type === 'qa')
+  if (qa.length === 0) throw new Error('No Q&A cards to tag')
+  let k = Math.min(settings.categoryClusterK || 8, qa.length)
+  k = Math.max(2, k)
+  const texts = qa.map(c => `${c.front}\n${c.back}`.slice(0, 12000))
+  const vectors = await openaiEmbeddings(texts, key)
+  const assignments = kmeansCosine(vectors, k)
+  const perCluster = Array.from({ length: k }, () => [])
+  for (let i = 0; i < qa.length; i++) {
+    perCluster[assignments[i]].push(qa[i].front.slice(0, 200))
+  }
+  const samples = perCluster.map((fronts, i) => {
+    const uniq = [...new Set(fronts)].slice(0, 6)
+    return { cluster: i, samples: uniq.length ? uniq : [`(empty-cluster-${i})`] }
+  })
+  const tags = await labelClustersWithClaude(k, samples)
+  for (let i = 0; i < qa.length; i++) {
+    const tag = tags[assignments[i]] || 'misc'
+    saveQaTagsForRow(qa[i].id, tag)
+  }
+}
+
+ipcMain.handle('auto-tag-cards', async () => {
+  try {
+    await runAutoTagAll()
+    cards = loadCards()
+    if (currentView.type === 'catalog') {
+      setView('catalog', { catalog: getCatalog(), stats: getStats() })
+    }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
+
+ipcMain.handle('delete-card', (_, { cardId }) => {
+  if (!deleteCardById(cardId)) return { ok: false }
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  } else if (currentView.type === 'card' && currentCard?.id === cardId) {
+    hideWindow()
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('apply-card-edit', (_, { cardId, front, back }) => {
+  const card = cards.find(c => c.id === cardId)
+  if (!card) return { ok: false }
+  if (!saveCardEdit(card, front, back)) return { ok: false }
+  cards = loadCards()
+  const c = cards.find(x => x.id === cardId)
+  if (c && currentView.type === 'card') {
+    currentCard = c
+    setView('card', { card: c, stats: getStats(), sessionDone, sessionTotal: sessionQueue.length })
+  }
+  return { ok: true }
+})
+
+// ── Edit card with AI (chat) ──────────────────────────────────────────────────
+ipcMain.handle('edit-card-chat', async (_, { card, messages }) => {
+  const ai = getAI()
+  const deck = cards.filter(c => c.id !== card.id).slice(0, 50)
+  const ctx = deck.map(c => `- (${c.type}) ${String(c.front).slice(0, 140)}`).join('\n')
+  const system = `You are a collaborative flashcard editor. Help the user improve this card: specific, testable questions; concise, memorable answers; optional short example in the answer when helpful.
+
+When you propose final Q/A, include a JSON code block: \`\`\`json\n{"front":"...","back":"..."}\n\`\`\`
+
+Other cards in the library (truncated):
+${ctx || '(none)'}
+
+Current card:
+Q: ${card.front}
+A: ${card.back}`
+  const resp = await ai.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1200,
+    system,
+    messages,
+  })
+  return resp.content[0].text
 })
 
 // ── Chat with AI about a card ─────────────────────────────────────────────────
@@ -506,8 +833,8 @@ Help them build deep understanding of the underlying concept. Be conversational,
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(() => {
   settings  = loadSettings()
-  cards     = loadCards()
   cardState = loadState()
+  cards     = loadCards()
 
   const openedAsLoginItem = app.getLoginItemSettings().wasOpenedAtLogin
 
@@ -527,8 +854,8 @@ app.whenReady().then(() => {
   }
 
   app.on('activate', () => {
-    cards     = loadCards()
     cardState = loadState()
+    cards     = loadCards()
     if (!windowAlive()) {
       ensureWindow()
       return

@@ -30,10 +30,11 @@ html,body{width:100%;height:100%;background:transparent;
 }
 
 /* ── shell / layout ── */
-#shell{position:fixed;inset:0;display:flex;align-items:flex-end;justify-content:flex-end}
+#shell{position:fixed;inset:0;overflow:hidden}
 
 /* ═══ PILL ═══════════════════════════════════════════════════════════════════ */
 #pill{
+  position:absolute;right:0;bottom:0;left:auto;top:auto;
   width:400px;height:84px;border-radius:var(--r-pill);
   display:flex;align-items:center;gap:12px;padding:0 14px 0 20px;
   -webkit-app-region:drag;
@@ -55,11 +56,10 @@ html,body{width:100%;height:100%;background:transparent;
 
 /* ═══ MAIN WINDOW ════════════════════════════════════════════════════════════ */
 #main{
-  width:460px;border-radius:var(--r-card);
-  height:100%;max-height:100%;
-  min-height:0;
+  position:absolute;inset:0;width:auto;height:auto;min-width:0;min-height:0;
+  border-radius:var(--r-card);
   display:none;flex-direction:column;overflow:hidden;
-  -webkit-app-region:drag;
+  /* Drag only from #titlebar / #pill — not here, or settings & controls stop receiving clicks */
 }
 
 /* titlebar */
@@ -90,7 +90,7 @@ html,body{width:100%;height:100%;background:transparent;
 .tab.active{background:rgba(255,255,255,.10);color:var(--text)}
 
 /* ═══ CARD VIEW ══════════════════════════════════════════════════════════════ */
-#card-view{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;-webkit-app-region:no-drag}
+#card-view{position:relative;flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;-webkit-app-region:no-drag}
 
 /* session progress strip */
 #session-strip{
@@ -161,9 +161,32 @@ html,body{width:100%;height:100%;background:transparent;
 #edit-overlay{
   display:none;position:absolute;inset:0;z-index:50;
   background:rgba(12,12,16,.75);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
-  border-radius:var(--r-card);padding:24px;flex-direction:column;gap:16px
+  border-radius:var(--r-card);padding:16px 20px 20px;flex-direction:column;gap:10px;min-height:0
 }
 #edit-overlay.open{display:flex}
+#edit-messages{
+  flex:1;min-height:80px;max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
+  padding:8px;border-radius:12px;background:rgba(0,0,0,.2);-webkit-app-region:no-drag
+}
+.edit-msg{font-size:12px;line-height:1.45;padding:8px 10px;border-radius:12px;max-width:95%;white-space:pre-wrap;word-break:break-word}
+.edit-msg.user{align-self:flex-end;background:var(--accent);color:#fff}
+.edit-msg.ai{align-self:flex-start;background:rgba(255,255,255,.08);border:.5px solid var(--border)}
+#edit-chat-row{display:flex;gap:8px;-webkit-app-region:no-drag}
+#edit-chat-input{
+  flex:1;background:rgba(255,255,255,.07);border:.5px solid var(--border);border-radius:12px;
+  color:var(--text);font-size:13px;font-family:inherit;padding:8px 12px;outline:none
+}
+#btn-edit-send{
+  width:36px;height:36px;border:none;border-radius:50%;background:var(--accent);color:#fff;
+  cursor:pointer;flex-shrink:0;font-size:14px
+}
+#edit-fields-wrap{display:flex;flex-direction:column;gap:10px;flex-shrink:0}
+.catalog-del{
+  width:28px;height:28px;border:none;border-radius:8px;background:rgba(255,59,48,.15);color:#ff453a;
+  cursor:pointer;font-size:16px;line-height:1;flex-shrink:0
+}
+.catalog-del:hover{background:rgba(255,59,48,.28)}
+.ci-tags{font-size:10px;color:var(--dim);margin-top:4px}
 .edit-label{font-size:11.5px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.07em}
 .edit-field{
   width:100%;background:rgba(255,255,255,.07);border:.5px solid var(--border);border-radius:10px;
@@ -329,7 +352,8 @@ html,body{width:100%;height:100%;background:transparent;
 /* ═══ SETTINGS PANEL ═════════════════════════════════════════════════════════ */
 #settings-panel{
   display:none;padding:14px 18px 16px;flex-direction:column;gap:12px;flex-shrink:0;
-  border-top:.5px solid var(--border)
+  border-top:.5px solid var(--border);
+  -webkit-app-region:no-drag
 }
 #settings-panel.open{display:flex}
 .srow{display:flex;align-items:center;gap:10px}
@@ -369,7 +393,7 @@ body.chat-mode  #catalog-view{display:none!important}
 <div id="shell">
 
   <!-- ══ PILL ══════════════════════════════════════════════════════════════ -->
-  <div id="pill" class="glass" style="position:relative">
+  <div id="pill" class="glass">
     <span id="pill-icon">🧠</span>
     <span id="pill-q">Loading…</span>
     <div id="pill-btns">
@@ -380,7 +404,7 @@ body.chat-mode  #catalog-view{display:none!important}
   </div>
 
   <!-- ══ MAIN WINDOW ═══════════════════════════════════════════════════════ -->
-  <div id="main" class="glass" style="position:relative">
+  <div id="main" class="glass">
 
     <!-- titlebar -->
     <div id="titlebar">
@@ -431,29 +455,30 @@ body.chat-mode  #catalog-view{display:none!important}
           <div id="secondary-row">
             <button class="sec-btn" onclick="editCard()">✦ Edit with AI</button>
             <button class="sec-btn" onclick="talkAbout()">💬 Talk more</button>
+            <button class="sec-btn" onclick="deleteCurrentCard()" style="color:var(--red)">🗑 Delete</button>
           </div>
         </div>
       </div>
 
       <!-- edit overlay (inside card view) -->
       <div id="edit-overlay">
-        <div style="display:flex;align-items:center;justify-content:space-between">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <span style="font-size:13px;font-weight:600">Edit with AI</span>
           <button class="icon-btn" onclick="closeEdit()">✕</button>
         </div>
-        <div id="edit-spinner"><div class="spin"></div>Improving card…</div>
-        <div id="edit-fields" style="display:none;flex-direction:column;gap:12px">
-          <div>
-            <div class="edit-label" style="margin-bottom:6px">Question</div>
-            <textarea class="edit-field" id="edit-front" rows="3"></textarea>
-          </div>
-          <div>
-            <div class="edit-label" style="margin-bottom:6px">Answer</div>
-            <textarea class="edit-field" id="edit-back" rows="4"></textarea>
-          </div>
+        <div id="edit-messages"></div>
+        <div id="edit-chat-row">
+          <input id="edit-chat-input" placeholder="Ask how to improve this card…" onkeydown="editChatKeydown(event)">
+          <button type="button" id="btn-edit-send" onclick="sendEditChat()">↑</button>
+        </div>
+        <div id="edit-spinner"><div class="spin"></div>Thinking…</div>
+        <div id="edit-fields-wrap" style="display:none">
+          <div class="edit-label">Draft question / answer (edit or paste from chat JSON)</div>
+          <textarea class="edit-field" id="edit-front" rows="2"></textarea>
+          <textarea class="edit-field" id="edit-back" rows="3"></textarea>
           <div class="edit-row">
             <button class="edit-action" id="edit-discard" onclick="closeEdit()">Discard</button>
-            <button class="edit-action" id="edit-accept" onclick="acceptEdit()">Accept</button>
+            <button class="edit-action" id="edit-accept" onclick="acceptEdit()">Save to card</button>
           </div>
         </div>
       </div>
@@ -539,6 +564,21 @@ body.chat-mode  #catalog-view{display:none!important}
                  padding:8px 12px;outline:none;"
           onfocus="this.type='text'" onblur="this.type='password'">
       </div>
+      <div class="srow" style="flex-direction:column;align-items:stretch;gap:5px">
+        <span class="slabel" style="width:auto">OpenAI API key (embeddings / auto-tag)</span>
+        <input type="password" id="s-openai-key" placeholder="sk-…"
+          style="width:100%;background:rgba(255,255,255,.07);border:.5px solid var(--border);
+                 border-radius:10px;color:var(--text);font-size:12px;font-family:inherit;
+                 padding:8px 12px;outline:none;"
+          onfocus="this.type='text'" onblur="this.type='password'">
+      </div>
+      <div class="srow">
+        <span class="slabel">Tag clusters</span>
+        <input type="range" id="r-cluster" min="2" max="16" step="1" value="8"
+               oninput="document.getElementById('v-cluster').textContent=this.value">
+        <span class="sval" id="v-cluster">8</span>
+      </div>
+      <button type="button" id="btn-auto-tag" onclick="runAutoTag()" style="width:100%;height:36px;border:none;border-radius:10px;background:rgba(255,255,255,.08);color:var(--text);font-size:13px;font-weight:600;cursor:pointer">Auto-generate categories (Q&A)</button>
       <button id="btn-save-settings" onclick="saveSettings()">Save settings</button>
     </div>
 
@@ -548,7 +588,7 @@ body.chat-mode  #catalog-view{display:none!important}
 <script>
 // ── State ──────────────────────────────────────────────────────────────────
 let currentCard   = null
-let editImproved  = null   // holds pending AI edit
+let editChatMessages = []  // Anthropic-shaped {role, content}[]
 let catalogData   = []
 let chatHistory   = []     // [{role, content}]
 let chatCard      = null
@@ -686,15 +726,32 @@ function toggleSettings() {
 
 function saveSettings() {
   const apiKey = document.getElementById('s-apikey').value.trim()
+  const openaiKey = document.getElementById('s-openai-key').value.trim()
   window.api.saveSettings({
     intervalMinutes: parseInt(document.getElementById('r-interval').value),
     cardsPerSession: parseInt(document.getElementById('r-cps').value),
     annoyanceLevel:  parseInt(document.getElementById('r-annoy').value),
     launchAtLogin:   parseInt(document.getElementById('r-login').value) === 1,
+    categoryClusterK: parseInt(document.getElementById('r-cluster').value, 10),
     ...(apiKey && { anthropicApiKey: apiKey }),
+    ...(openaiKey && { openaiApiKey: openaiKey }),
   })
   document.getElementById('settings-panel').classList.remove('open')
   document.getElementById('btn-gear').classList.remove('active')
+}
+
+async function runAutoTag() {
+  const btn = document.getElementById('btn-auto-tag')
+  btn.disabled = true
+  btn.textContent = 'Running…'
+  try {
+    const r = await window.api.autoTagCards()
+    if (!r.ok) alert(r.error || 'Auto-tag failed')
+    else window.api.openCatalog()
+  } finally {
+    btn.disabled = false
+    btn.textContent = 'Auto-generate categories (Q&A)'
+  }
 }
 
 window.api.getSettings().then(s => {
@@ -708,44 +765,102 @@ window.api.getSettings().then(s => {
   document.getElementById('r-login').value = login
   document.getElementById('v-login').textContent = login ? 'On' : 'Off'
   if (s.anthropicApiKey) document.getElementById('s-apikey').placeholder = 'sk-ant-… (saved)'
+  const ck = s.categoryClusterK || 8
+  document.getElementById('r-cluster').value = ck
+  document.getElementById('v-cluster').textContent = String(ck)
+  if (s.openaiApiKey) document.getElementById('s-openai-key').placeholder = 'sk-… (saved)'
 })
 
-// ── Edit with AI ───────────────────────────────────────────────────────────
+// ── Edit with AI (chat) ─────────────────────────────────────────────────────
 function editCard() {
   if (!currentCard) return
-  const overlay = document.getElementById('edit-overlay')
-  overlay.classList.add('open')
-  document.getElementById('edit-spinner').style.display = 'flex'
-  document.getElementById('edit-fields').style.display = 'none'
+  document.getElementById('edit-overlay').classList.add('open')
+  document.getElementById('edit-messages').innerHTML = ''
+  document.getElementById('edit-chat-input').value = ''
+  editChatMessages = []
+  document.getElementById('edit-spinner').style.display = 'none'
+  document.getElementById('edit-fields-wrap').style.display = 'flex'
+  document.getElementById('edit-front').value = currentCard.front
+  document.getElementById('edit-back').value = currentCard.back
+  appendEditMsg('ai', 'Describe what you want changed, or ask for a sharper question and answer. I can return JSON in a code block when ready.')
+}
 
-  window.api.editCard(currentCard).then(improved => {
-    editImproved = improved
+function appendEditMsg(role, text) {
+  const wrap = document.getElementById('edit-messages')
+  const div = document.createElement('div')
+  div.className = 'edit-msg ' + (role === 'user' ? 'user' : 'ai')
+  div.textContent = text
+  wrap.appendChild(div)
+  wrap.scrollTop = wrap.scrollHeight
+}
+
+function tryParseJsonFromEdit(text) {
+  const m = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (!m) return
+  try {
+    const j = JSON.parse(m[1].trim())
+    if (j.front) document.getElementById('edit-front').value = j.front
+    if (j.back) document.getElementById('edit-back').value = j.back
+  } catch (_) {}
+}
+
+function editChatKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    sendEditChat()
+  }
+}
+
+async function sendEditChat() {
+  if (!currentCard) return
+  const input = document.getElementById('edit-chat-input')
+  const text = input.value.trim()
+  if (!text) return
+  input.value = ''
+  editChatMessages.push({ role: 'user', content: text })
+  appendEditMsg('user', text)
+  document.getElementById('edit-spinner').style.display = 'flex'
+  try {
+    const reply = await window.api.editCardChat(editChatMessages, currentCard)
+    editChatMessages.push({ role: 'assistant', content: reply })
+    appendEditMsg('ai', reply)
+    tryParseJsonFromEdit(reply)
+  } catch (err) {
+    appendEditMsg('ai', 'Error: ' + (err.message || 'request failed'))
+  } finally {
     document.getElementById('edit-spinner').style.display = 'none'
-    document.getElementById('edit-fields').style.display = 'flex'
-    document.getElementById('edit-front').value = improved.front
-    document.getElementById('edit-back').value  = improved.back
-  }).catch(err => {
-    closeEdit()
-    alert('AI edit failed: ' + (err.message || 'unknown error'))
-  })
+  }
 }
 
 function closeEdit() {
   document.getElementById('edit-overlay').classList.remove('open')
   document.getElementById('edit-spinner').style.display = 'none'
-  document.getElementById('edit-fields').style.display = 'none'
-  editImproved = null
+  document.getElementById('edit-fields-wrap').style.display = 'none'
+  editChatMessages = []
 }
 
-function acceptEdit() {
-  // update the in-memory currentCard with textarea values (already saved by main)
-  if (currentCard) {
-    currentCard.front = document.getElementById('edit-front').value
-    currentCard.back  = document.getElementById('edit-back').value
-    document.getElementById('question').textContent     = currentCard.front
-    document.getElementById('answer-text').textContent  = currentCard.back
+async function acceptEdit() {
+  if (!currentCard) return
+  const front = document.getElementById('edit-front').value
+  const back = document.getElementById('edit-back').value
+  const r = await window.api.applyCardEdit(currentCard.id, front, back)
+  if (!r.ok) {
+    alert('Could not save card')
+    return
   }
+  currentCard.front = front
+  currentCard.back = back
+  document.getElementById('question').textContent = front
+  document.getElementById('answer-text').textContent = back
   closeEdit()
+}
+
+async function deleteCurrentCard() {
+  if (!currentCard) return
+  if (!confirm('Delete this card permanently?')) return
+  const r = await window.api.deleteCard(currentCard.id)
+  if (r.ok) closeEdit()
+  else alert('Could not delete card')
 }
 
 // ── Talk more ──────────────────────────────────────────────────────────────
@@ -843,6 +958,15 @@ function renderCatalogList(data) {
     const q = document.createElement('div')
     q.className = 'ci-q'
     q.textContent = item.front
+    if (item.tags && item.tags.length) {
+      const tg = document.createElement('div')
+      tg.className = 'ci-tags'
+      tg.textContent = item.tags.join(' · ')
+      body.appendChild(q)
+      body.appendChild(tg)
+    } else {
+      body.appendChild(q)
+    }
     const meta = document.createElement('div')
     meta.className = 'ci-meta'
     const got = document.createElement('span')
@@ -875,10 +999,21 @@ function renderCatalogList(data) {
     }
     meta.appendChild(spacer)
     meta.appendChild(due)
-    body.appendChild(q)
     body.appendChild(meta)
+    const del = document.createElement('button')
+    del.type = 'button'
+    del.className = 'catalog-del'
+    del.title = 'Delete card'
+    del.textContent = '×'
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation()
+      if (!confirm('Delete this card?')) return
+      const r = await window.api.deleteCard(item.id)
+      if (!r.ok) alert('Could not delete card')
+    })
     el.appendChild(typeSpan)
     el.appendChild(body)
+    el.appendChild(del)
     el.addEventListener('click', () => window.api.openCardFromCatalog(item.id))
     el.tabIndex = 0
     el.setAttribute('role', 'button')
@@ -894,7 +1029,13 @@ function renderCatalogList(data) {
 
 function filterCatalog(query) {
   const q = query.toLowerCase()
-  const filtered = q ? catalogData.filter(c => c.front.toLowerCase().includes(q)) : catalogData
+  const filtered = q
+    ? catalogData.filter(c => {
+        if (c.front.toLowerCase().includes(q)) return true
+        const tags = c.tags || []
+        return tags.some(t => String(t).toLowerCase().includes(q))
+      })
+    : catalogData
   renderCatalogList(filtered)
 }
 

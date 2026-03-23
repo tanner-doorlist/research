@@ -36,7 +36,9 @@ else
 fi
 
 # ── Build .app with electron-builder ────────────────────────────────────────
+# Wipe dist/ so electron-builder cannot reuse a stale app.asar (old main.js → runtime errors).
 echo "🔨 Building .app bundle…"
+rm -rf dist
 npx electron-builder --mac --dir
 
 BUILT=$(find dist/mac* -name "*.app" -maxdepth 1 2>/dev/null | head -1)
@@ -56,6 +58,10 @@ echo "   ✓ Installed: $DEST"
 # ── Launch ────────────────────────────────────────────────────────────────────
 echo ""
 echo "✅ Done! Launching Study Notifier…"
+echo "   Tip: Quit any running copy first. This install is only:"
+echo "   $DEST"
+echo "   If you have another Study Notifier.app elsewhere (e.g. /Applications), remove it or"
+echo "   you may launch an old build by mistake."
 echo "   It will register itself as a login item on first run."
 echo "   You can toggle this in the app's ⚙ settings."
 echo ""
