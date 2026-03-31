@@ -1,0 +1,118 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: rgba(18, 18, 22, 0.6);
+  --color-glass-border: rgba(255, 255, 255, 0.08);
+  --color-shine: rgba(255, 255, 255, 0.04);
+  --color-accent: #7c6cf8;
+  --color-accent-glow: rgba(124, 108, 248, 0.25);
+  --color-accent-subtle: rgba(124, 108, 248, 0.12);
+  --color-success: #34c759;
+  --color-danger: #ff453a;
+  --color-warning: #ff9f0a;
+  --color-text-primary: rgba(255, 255, 255, 0.88);
+  --color-text-secondary: rgba(255, 255, 255, 0.55);
+  --color-text-tertiary: rgba(255, 255, 255, 0.3);
+  --color-surface: rgba(255, 255, 255, 0.05);
+  --color-surface-hover: rgba(255, 255, 255, 0.08);
+  --color-border: rgba(255, 255, 255, 0.06);
+
+  --radius-pill: 42px;
+  --radius-window: 22px;
+  --radius-lg: 10px;
+  --radius-md: 7px;
+  --radius-sm: 5px;
+
+  --spacing-x: 16px;
+  --spacing-y: 10px;
+  --spacing-gap: 8px;
+  --spacing-gap-sm: 4px;
+  --spacing-gap-lg: 12px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  width: 100%; height: 100%;
+  background: transparent;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  user-select: none;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.glass {
+  background: var(--color-bg);
+  backdrop-filter: blur(48px) saturate(180%);
+  -webkit-backdrop-filter: blur(48px) saturate(180%);
+}
+
+.drag-region { -webkit-app-region: drag; }
+.no-drag { -webkit-app-region: no-drag; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 2px; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  15% { transform: translateX(-4px); }
+  30% { transform: translateX(4px); }
+  45% { transform: translateX(-2px); }
+  60% { transform: translateX(2px); }
+}
+
+.animate-fade-up { animation: fadeUp 0.15s ease-out; }
+.animate-spin { animation: spin 0.7s linear infinite; }
+.animate-shake { animation: shake 0.35s ease; }
+
+/* Markdown */
+.md-content { -webkit-user-select: text; user-select: text; }
+.md-content > :first-child { margin-top: 0; }
+.md-content > :last-child { margin-bottom: 0; }
+.md-content h1 { font-size: 1.25em; font-weight: 600; margin: 0.5em 0 0.3em; }
+.md-content h2 { font-size: 1.15em; font-weight: 600; margin: 0.45em 0 0.25em; }
+.md-content h3 { font-size: 1.05em; font-weight: 600; margin: 0.4em 0 0.2em; }
+.md-content p { margin: 0.3em 0; }
+.md-content ul, .md-content ol { margin: 0.3em 0; padding-left: 1.3em; }
+.md-content li { margin: 0.1em 0; }
+.md-content blockquote {
+  margin: 0.3em 0; padding-left: 0.75em;
+  border-left: 2px solid rgba(255, 255, 255, 0.12);
+  color: var(--color-text-secondary);
+}
+.md-content pre {
+  margin: 0.5em 0; padding: 10px 12px; border-radius: var(--radius-md); overflow-x: auto;
+  background: rgba(0, 0, 0, 0.25); border: 1px solid var(--color-border);
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.5;
+}
+.md-content code:not(pre code) {
+  font-family: var(--font-mono); font-size: 0.9em;
+  background: rgba(124, 108, 248, 0.15); padding: 1px 5px; border-radius: 3px;
+}
+.md-content pre code { background: transparent; padding: 0; border-radius: 0; font-size: inherit; }
+
+/* highlight.js */
+.hljs { color: #c9d1d9; background: transparent; }
+.hljs-keyword, .hljs-selector-tag, .hljs-subst { color: #ff7b72; }
+.hljs-string, .hljs-meta .hljs-string { color: #a5d6ff; }
+.hljs-number { color: #79c0ff; }
+.hljs-function, .hljs-title { color: #d2a8ff; }
+.hljs-params, .hljs-property { color: rgba(201, 209, 217, 0.92); }
+.hljs-comment, .hljs-quote { color: #8b949e; }
+.hljs-variable, .hljs-template-variable, .hljs-attr { color: #ffa657; }
+.hljs-built_in, .hljs-type { color: #ffa657; }
+.hljs-literal { color: #79c0ff; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }

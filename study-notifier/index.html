@@ -31,6 +31,11 @@ html,body{width:100%;height:100%;background:transparent;
 
 /* ── shell / layout ── */
 #shell{position:fixed;inset:0;overflow:hidden}
+body.pill-mode     #shell{border-radius:var(--r-pill)}
+body.card-mode     #shell,
+body.catalog-mode  #shell,
+body.chat-mode     #shell,
+body.knowledge-mode #shell{border-radius:var(--r-card)}
 
 /* ═══ PILL ═══════════════════════════════════════════════════════════════════ */
 #pill{
@@ -124,7 +129,9 @@ html,body{width:100%;height:100%;background:transparent;
 }
 .type-badge.qa{background:rgba(124,108,248,.18);color:#a78bfa}
 .type-badge.concept{background:rgba(255,159,10,.15);color:#ff9f0a}
-#question{font-size:17px;font-weight:600;line-height:1.45;flex:1;margin-bottom:16px}
+#question{font-size:17px;line-height:1.45;flex:1;margin-bottom:16px}
+#question .md-content{font-weight:400}
+#question .md-content h1,#question .md-content h2,#question .md-content h3{font-weight:650}
 #btn-reveal{
   width:100%;height:46px;border:.5px solid var(--border);border-radius:14px;
   background:rgba(255,255,255,.06);color:var(--text);font-size:13.5px;font-weight:600;
@@ -136,7 +143,7 @@ html,body{width:100%;height:100%;background:transparent;
 /* answer area */
 #answer-area{display:none;flex-direction:column;gap:14px;animation:fadeUp .2s ease}
 .adivider{width:100%;height:.5px;background:linear-gradient(90deg,transparent,var(--border),transparent)}
-#answer-text{font-size:14px;line-height:1.65;color:rgba(255,255,255,.78);white-space:pre-wrap}
+#answer-text{font-size:14px;line-height:1.65;color:rgba(255,255,255,.78)}
 #verdict-row{display:flex;gap:10px}
 .vbtn{
   flex:1;height:46px;border:none;border-radius:14px;cursor:pointer;
@@ -168,7 +175,8 @@ html,body{width:100%;height:100%;background:transparent;
   flex:1;min-height:80px;max-height:180px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
   padding:8px;border-radius:12px;background:rgba(0,0,0,.2);-webkit-app-region:no-drag
 }
-.edit-msg{font-size:12px;line-height:1.45;padding:8px 10px;border-radius:12px;max-width:95%;white-space:pre-wrap;word-break:break-word}
+.edit-msg{font-size:12px;line-height:1.45;padding:8px 10px;border-radius:12px;max-width:95%;word-break:break-word}
+.edit-msg .md-content{white-space:normal}
 .edit-msg.user{align-self:flex-end;background:var(--accent);color:#fff}
 .edit-msg.ai{align-self:flex-start;background:rgba(255,255,255,.08);border:.5px solid var(--border)}
 #edit-chat-row{display:flex;gap:8px;-webkit-app-region:no-drag}
@@ -366,6 +374,50 @@ html,body{width:100%;height:100%;background:transparent;
   font-family:inherit;cursor:pointer;margin-top:2px
 }
 
+/* markdown + highlight.js (github-dark inspired) */
+.md-content{-webkit-user-select:text;user-select:text}
+.md-content>:first-child{margin-top:0}
+.md-content>:last-child{margin-bottom:0}
+.md-content h1{font-size:1.35em;font-weight:650;margin:.6em 0 .35em}
+.md-content h2{font-size:1.22em;font-weight:650;margin:.55em 0 .3em}
+.md-content h3{font-size:1.1em;font-weight:600;margin:.5em 0 .25em}
+.md-content h4,.md-content h5,.md-content h6{font-size:1em;font-weight:600;margin:.45em 0 .2em}
+.md-content p{margin:.35em 0}
+.md-content ul,.md-content ol{margin:.35em 0;padding-left:1.35em}
+.md-content li{margin:.15em 0}
+.md-content blockquote{margin:.4em 0;padding-left:.85em;border-left:3px solid rgba(255,255,255,.15);color:rgba(255,255,255,.72)}
+.md-content pre{
+  margin:.6em 0;padding:12px 14px;border-radius:12px;overflow-x:auto;
+  background:rgba(0,0,0,.32);border:.5px solid rgba(255,255,255,.08);
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;line-height:1.55
+}
+.md-content code:not(pre code){
+  font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:.92em;
+  background:rgba(124,108,248,.2);padding:1px 6px;border-radius:5px
+}
+.md-content pre code{background:transparent;padding:0;border-radius:0;font-size:inherit}
+#answer-text .md-content{color:rgba(255,255,255,.85)}
+.msg .md-content{white-space:normal}
+.msg.user .md-content code:not(pre code){background:rgba(255,255,255,.15)}
+.msg.user .md-content pre{background:rgba(0,0,0,.22);border-color:rgba(255,255,255,.12)}
+.edit-msg.user .md-content code:not(pre code){background:rgba(255,255,255,.15)}
+.edit-msg.user .md-content pre{background:rgba(0,0,0,.22);border-color:rgba(255,255,255,.12)}
+.hljs{color:#c9d1d9;background:transparent}
+.hljs-keyword,.hljs-selector-tag,.hljs-subst{color:#ff7b72}
+.hljs-string,.hljs-meta .hljs-string{color:#a5d6ff}
+.hljs-number{color:#79c0ff}
+.hljs-function,.hljs-title{color:#d2a8ff}
+.hljs-params,.hljs-property{color:rgba(201,209,217,.92)}
+.hljs-comment,.hljs-quote{color:#8b949e}
+.hljs-variable,.hljs-template-variable,.hljs-attr{color:#ffa657}
+.hljs-built_in,.hljs-type{color:#ffa657}
+.hljs-literal{color:#79c0ff}
+.hljs-regexp{color:#a5d6ff}
+.hljs-symbol,.hljs-bullet{color:#79c0ff}
+.hljs-name,.hljs-section{color:#7ee787}
+.hljs-emphasis{font-style:italic}
+.hljs-strong{font-weight:700}
+
 /* ═══ ANIMATIONS ═════════════════════════════════════════════════════════════ */
 @keyframes fadeUp{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -387,6 +439,170 @@ body.catalog-mode #chat-view{display:none!important}
 body.chat-mode  #pill{display:none} body.chat-mode  #main{display:flex} body.chat-mode #chat-view{display:flex}
 body.chat-mode  #card-view,
 body.chat-mode  #catalog-view{display:none!important}
+body.knowledge-mode #pill{display:none} body.knowledge-mode #main{display:flex} body.knowledge-mode #knowledge-view{display:flex}
+body.knowledge-mode #card-view,
+body.knowledge-mode #catalog-view,
+body.knowledge-mode #chat-view{display:none!important}
+body.analytics-mode #pill{display:none} body.analytics-mode #main{display:flex} body.analytics-mode #analytics-view{display:flex}
+body.analytics-mode #card-view,
+body.analytics-mode #catalog-view,
+body.analytics-mode #chat-view,
+body.analytics-mode #knowledge-view{display:none!important}
+body.analytics-mode #shell{border-radius:var(--r-card)}
+
+/* ═══ KNOWLEDGE VIEW ═════════════════════════════════════════════════════════ */
+#knowledge-view{display:none;flex-direction:column;flex:1;overflow:hidden;min-height:0}
+#kb-header{padding:14px 18px 10px;flex-shrink:0;border-bottom:.5px solid var(--border)}
+#kb-title{font-size:15px;font-weight:700;margin-bottom:3px}
+#kb-meta{font-size:11px;color:var(--dim);display:flex;gap:8px;align-items:center}
+#kb-dot{color:var(--dimmer)}
+.kb-online{color:var(--green)}
+.kb-offline{color:var(--red)}
+#kb-search-wrap{
+  display:flex;align-items:center;gap:8px;padding:10px 14px;
+  border-bottom:.5px solid var(--border);flex-shrink:0
+}
+#kb-search-icon{color:var(--dim);font-size:16px;flex-shrink:0}
+#kb-search{
+  flex:1;background:rgba(255,255,255,.07);border:.5px solid var(--border);
+  border-radius:10px;color:var(--text);font-size:12.5px;font-family:inherit;
+  padding:7px 12px;outline:none
+}
+#kb-search-btn{
+  width:30px;height:30px;border:none;border-radius:50%;background:var(--accent);
+  color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0
+}
+#kb-list-wrap,#kb-detail,#kb-results{flex:1;overflow-y:auto;min-height:0;padding:8px 0}
+.kb-log-row{
+  padding:10px 18px;cursor:pointer;border-bottom:.5px solid rgba(255,255,255,.05);
+  transition:background .1s
+}
+.kb-log-row:hover{background:rgba(255,255,255,.04)}
+.kb-log-problem{font-size:13px;font-weight:500;margin-bottom:3px;
+  overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.kb-log-meta{font-size:11px;color:var(--dim);display:flex;gap:8px}
+.kb-log-tags{color:var(--accent);font-size:10.5px}
+#kb-detail{padding:14px 18px;display:none;flex-direction:column;gap:10px}
+.kb-back-btn{
+  background:none;border:none;color:var(--dim);font-size:12px;cursor:pointer;
+  text-align:left;padding:0;margin-bottom:4px;font-family:inherit
+}
+.kb-back-btn:hover{color:var(--text)}
+#kb-detail-content{font-size:13px;line-height:1.6;flex:1;overflow-y:auto}
+#kb-results{padding:0;display:none;flex-direction:column}
+#kb-results-header{
+  display:flex;align-items:center;gap:10px;padding:10px 18px;
+  border-bottom:.5px solid var(--border);flex-shrink:0
+}
+#kb-results-query{font-size:12px;color:var(--dim);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+#kb-results-content{flex:1;overflow-y:auto;padding:12px 18px;font-size:12.5px;
+  line-height:1.7;white-space:pre-wrap;color:rgba(255,255,255,.75)}
+.kb-searching{display:flex;align-items:center;gap:8px;color:var(--dim);
+  padding:20px 18px;font-size:13px}
+
+/* ═══ TAG FILTER PILLS ═══════════════════════════════════════════════════════ */
+#catalog-tag-row{
+  display:flex;gap:7px;padding:9px 18px 2px;overflow-x:auto;flex-shrink:0;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch
+}
+#catalog-tag-row::-webkit-scrollbar{display:none}
+.tag-pill{
+  flex-shrink:0;height:26px;padding:0 12px;border-radius:13px;border:none;cursor:pointer;
+  font-size:11.5px;font-weight:600;font-family:inherit;
+  background:rgba(255,255,255,.07);color:var(--dim);
+  transition:background .15s,color .15s
+}
+.tag-pill.active{background:var(--accent);color:#fff}
+#catalog-search-mode{
+  font-size:10px;color:var(--accent);font-weight:600;letter-spacing:.04em;
+  margin-left:auto;flex-shrink:0;display:none;padding:0 4px
+}
+#catalog-search-mode.visible{display:block}
+
+/* ═══ CARD TAGS ══════════════════════════════════════════════════════════════ */
+#card-tags-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px;flex-shrink:0;-webkit-app-region:no-drag}
+.card-tag-chip{
+  height:22px;padding:0 9px;border-radius:11px;
+  background:rgba(124,108,248,.15);color:#a78bfa;
+  font-size:10.5px;font-weight:600;cursor:pointer;border:none;font-family:inherit;
+  transition:background .15s
+}
+.card-tag-chip:hover{background:rgba(255,59,48,.2);color:#ff453a}
+#btn-tag-add{
+  height:22px;padding:0 9px;border-radius:11px;
+  background:rgba(255,255,255,.06);color:var(--dim);
+  font-size:10.5px;font-weight:600;cursor:pointer;border:.5px solid var(--border);font-family:inherit
+}
+#tag-input-row{display:none;align-items:center;gap:6px;margin-top:2px;width:100%}
+#tag-input{
+  height:28px;padding:0 10px;border-radius:10px;background:rgba(255,255,255,.07);
+  border:.5px solid var(--border);color:var(--text);font-size:12px;font-family:inherit;
+  outline:none;min-width:100px;flex:1
+}
+#tag-input:focus{border-color:var(--accent)}
+#btn-tag-confirm{
+  height:28px;padding:0 12px;border-radius:10px;border:none;
+  background:var(--accent);color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit
+}
+
+/* ═══ TYPE ANSWER ════════════════════════════════════════════════════════════ */
+#type-answer-toggle{
+  width:100%;height:36px;border:.5px solid var(--border);border-radius:12px;
+  background:rgba(255,255,255,.04);color:var(--dim);font-size:12.5px;font-weight:600;
+  font-family:inherit;cursor:pointer;margin-bottom:6px;transition:background .15s
+}
+#type-answer-toggle:hover{background:rgba(255,255,255,.08);color:var(--text)}
+#type-answer-wrap{display:none;flex-direction:column;gap:8px;margin-bottom:8px;-webkit-app-region:no-drag}
+#type-answer-input{
+  width:100%;background:rgba(255,255,255,.07);border:.5px solid var(--border);border-radius:12px;
+  color:var(--text);font-size:13px;font-family:inherit;padding:9px 12px;
+  outline:none;resize:none;min-height:64px;line-height:1.45
+}
+#type-answer-input:focus{border-color:rgba(124,108,248,.5)}
+#btn-evaluate{
+  width:100%;height:40px;border:.5px solid rgba(124,108,248,.3);border-radius:12px;
+  background:rgba(124,108,248,.12);color:var(--accent);font-size:13px;font-weight:600;
+  font-family:inherit;cursor:pointer;transition:background .15s
+}
+#btn-evaluate:hover{background:rgba(124,108,248,.22)}
+#eval-feedback{
+  display:none;padding:10px 12px;border-radius:12px;font-size:12.5px;line-height:1.5;
+  background:rgba(255,255,255,.04);border:.5px solid var(--border)
+}
+.eval-score-0{color:var(--red)}
+.eval-score-1{color:#ff9f0a}
+.eval-score-2{color:var(--green)}
+
+/* ═══ ANALYTICS VIEW ═════════════════════════════════════════════════════════ */
+#analytics-view{display:none;flex-direction:column;flex:1;overflow-y:auto;overflow-x:hidden;min-height:0;-webkit-app-region:no-drag}
+#analytics-header{padding:14px 18px 12px;flex-shrink:0;border-bottom:.5px solid var(--border)}
+#analytics-title{font-size:15px;font-weight:700}
+#analytics-summary{display:flex;gap:8px;padding:14px 18px;flex-shrink:0;flex-wrap:wrap}
+.an-chip{
+  flex:1;min-width:80px;display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:10px 8px;border-radius:14px;
+  background:rgba(255,255,255,.05);border:.5px solid rgba(255,255,255,.08)
+}
+.an-n{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.an-l{font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);font-weight:600}
+#analytics-activity{padding:0 18px 16px;flex-shrink:0}
+#activity-label{font-size:11.5px;font-weight:600;color:var(--dim);margin-bottom:8px}
+#activity-chart{display:block;width:100%;height:60px;border-radius:10px}
+#analytics-cats{padding:0 18px 20px;flex-shrink:0}
+#analytics-cats-title{font-size:11.5px;font-weight:600;color:var(--dim);margin-bottom:10px;letter-spacing:.07em;text-transform:uppercase}
+#analytics-index-row{display:flex;gap:8px;padding:0 18px 14px;flex-shrink:0}
+.an-action{
+  flex:1;height:34px;border:none;border-radius:10px;cursor:pointer;
+  font-size:12px;font-weight:600;font-family:inherit;
+  background:rgba(255,255,255,.07);color:var(--dim);transition:background .15s
+}
+.an-action:hover{background:rgba(255,255,255,.12);color:var(--text)}
+.cat-row{display:flex;flex-direction:column;gap:4px;margin-bottom:10px}
+.cat-row-top{display:flex;justify-content:space-between;align-items:baseline}
+.cat-name{font-size:12.5px;font-weight:550}
+.cat-stats{font-size:11px;color:var(--dim)}
+.cat-bar-track{height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+.cat-bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
 </style>
 </head>
 <body class="pill-mode">
@@ -412,6 +628,8 @@ body.chat-mode  #catalog-view{display:none!important}
         <button class="icon-btn" id="btn-back" onclick="backToCard()" style="display:none" title="Back">←</button>
         <button class="tab active" id="tab-cards" onclick="switchTab('card')">Cards</button>
         <button class="tab" id="tab-catalog" onclick="switchTab('catalog')">Catalog</button>
+        <button class="tab" id="tab-knowledge" onclick="switchTab('knowledge')">Logs</button>
+        <button class="tab" id="tab-analytics" onclick="switchTab('analytics')">Stats</button>
       </div>
       <span id="title-center">Study</span>
       <div id="title-right">
@@ -443,7 +661,14 @@ body.chat-mode  #catalog-view{display:none!important}
       <!-- card body -->
       <div id="card-body">
         <span class="type-badge qa" id="type-badge">Q&A</span>
+        <div id="card-tags-row"></div>
         <div id="question"></div>
+        <button id="type-answer-toggle" onclick="toggleTypeAnswer()">✍ Type Answer</button>
+        <div id="type-answer-wrap">
+          <textarea id="type-answer-input" placeholder="Write your answer here…" rows="3"></textarea>
+          <button id="btn-evaluate" onclick="evaluateTypedAnswer()">✦ Evaluate with AI</button>
+          <div id="eval-feedback"></div>
+        </div>
         <button id="btn-reveal" onclick="reveal()">Show Answer</button>
         <div id="answer-area">
           <div class="adivider"></div>
@@ -512,8 +737,10 @@ body.chat-mode  #catalog-view{display:none!important}
       </div>
       <div id="catalog-search-wrap">
         <span id="catalog-search-icon" aria-hidden="true">⌕</span>
-        <input id="catalog-search" placeholder="Search cards…" oninput="filterCatalog(this.value)" autocomplete="off">
+        <input id="catalog-search" placeholder="Search cards…" oninput="onCatalogSearch(this.value)" autocomplete="off">
+        <span id="catalog-search-mode">Semantic</span>
       </div>
+      <div id="catalog-tag-row"></div>
       <div id="catalog-list"></div>
     </div>
 
@@ -527,6 +754,68 @@ body.chat-mode  #catalog-view{display:none!important}
       <div id="chat-input-row">
         <input id="chat-input" placeholder="Ask a follow-up…" onkeydown="chatKeydown(event)">
         <button id="btn-chat-send" onclick="chatSend()">↑</button>
+      </div>
+    </div>
+
+    <!-- ── KNOWLEDGE VIEW ─────────────────────────────────────────────── -->
+    <div id="knowledge-view">
+      <div id="kb-header">
+        <div id="kb-title">Knowledge Base</div>
+        <div id="kb-meta">
+          <span id="kb-log-count">— logs</span>
+          <span id="kb-dot">·</span>
+          <span id="kb-db-status">⏳ DB</span>
+        </div>
+      </div>
+      <div id="kb-search-wrap">
+        <span id="kb-search-icon" aria-hidden="true">⌕</span>
+        <input id="kb-search" placeholder="Semantic search…" autocomplete="off"
+               onkeydown="if(event.key==='Enter')doKnowledgeSearch()">
+        <button id="kb-search-btn" onclick="doKnowledgeSearch()">↑</button>
+      </div>
+
+      <!-- log list -->
+      <div id="kb-list-wrap">
+        <div id="kb-list"></div>
+      </div>
+
+      <!-- log detail -->
+      <div id="kb-detail" style="display:none">
+        <button class="kb-back-btn" onclick="backToLogList()">← Logs</button>
+        <div id="kb-detail-content"></div>
+      </div>
+
+      <!-- search results -->
+      <div id="kb-results" style="display:none">
+        <div id="kb-results-header">
+          <button class="kb-back-btn" onclick="clearKnowledgeSearch()">← Back</button>
+          <span id="kb-results-query"></span>
+        </div>
+        <div id="kb-results-content"></div>
+      </div>
+    </div>
+
+    <!-- ── ANALYTICS VIEW ─────────────────────────────────────────────── -->
+    <div id="analytics-view">
+      <div id="analytics-header">
+        <div id="analytics-title">Analytics</div>
+      </div>
+      <div id="analytics-summary">
+        <div class="an-chip"><span class="an-n" id="an-reviews">—</span><span class="an-l">Reviews</span></div>
+        <div class="an-chip"><span class="an-n" id="an-accuracy">—%</span><span class="an-l">Accuracy</span></div>
+        <div class="an-chip"><span class="an-n" id="an-streak">—</span><span class="an-l">Streak</span></div>
+        <div class="an-chip"><span class="an-n" id="an-days">—</span><span class="an-l">Days Active</span></div>
+      </div>
+      <div id="analytics-index-row">
+        <button class="an-action" id="btn-index-cards" onclick="indexAllCards()">⚡ Index for Semantic Search</button>
+      </div>
+      <div id="analytics-activity">
+        <div id="activity-label">Reviews — last 30 days</div>
+        <canvas id="activity-chart"></canvas>
+      </div>
+      <div id="analytics-cats">
+        <div id="analytics-cats-title">By Category</div>
+        <div id="analytics-cat-list"></div>
       </div>
     </div>
 
@@ -593,14 +882,25 @@ let catalogData   = []
 let chatHistory   = []     // [{role, content}]
 let chatCard      = null
 
+function setMarkdown(el, md) {
+  el.innerHTML = window.api.renderMarkdown(md)
+}
+function setPreviewPlain(el, md) {
+  el.textContent = window.api.stripMarkdownPreview(md)
+}
+
 // ── Unified view handler (works for both pull and push) ───────────────────
 function handleView(view) {
-  if (!view || view.type === 'hidden') return
+  // Login-item launches leave currentView as 'hidden' in main until user acts; pull catalog so we never sit on "Loading…"
+  if (!view || view.type === 'hidden') {
+    if (typeof window.api !== 'undefined' && window.api.openCatalog) window.api.openCatalog()
+    return
+  }
 
   if (view.type === 'pill') {
     currentCard = view.card
     document.body.className = 'pill-mode'
-    document.getElementById('pill-q').textContent = view.card.front
+    setPreviewPlain(document.getElementById('pill-q'), view.card.front)
     const pct = view.sessionTotal > 0 ? (view.sessionDone / view.sessionTotal) * 100 : 0
     document.getElementById('pill-prog-fill').style.width = pct + '%'
   }
@@ -621,11 +921,25 @@ function handleView(view) {
     document.getElementById('btn-back').style.display = 'none'
   }
 
+  else if (view.type === 'knowledge') {
+    document.body.className = 'knowledge-mode'
+    setActiveTab('knowledge')
+    document.getElementById('btn-back').style.display = 'none'
+    loadKnowledgeView()
+  }
+
+  else if (view.type === 'analytics') {
+    document.body.className = 'analytics-mode'
+    setActiveTab('analytics')
+    document.getElementById('btn-back').style.display = 'none'
+    renderAnalytics(view.analytics)
+  }
+
   else if (view.type === 'chat') {
     chatCard = view.card
     chatHistory = []
     document.body.className = 'chat-mode'
-    document.getElementById('chat-ctx-q').textContent = view.card.front
+    setPreviewPlain(document.getElementById('chat-ctx-q'), view.card.front)
     document.getElementById('chat-messages').innerHTML = ''
     document.getElementById('btn-back').style.display = 'flex'
     appendMsg('ai', 'thinking', 'Thinking…')
@@ -638,20 +952,10 @@ function handleView(view) {
       chatHistory.push({ role: 'assistant', content: reply })
     }).catch(() => {
       document.getElementById('chat-messages').querySelector('.thinking')?.remove()
-      appendMsg('ai', 'ai', 'Set ANTHROPIC_API_KEY to enable AI chat.')
+      appendMsg('ai', 'ai', 'Set ANTHROPIC_API_KEY to enable AI chat.', true)
     })
   }
 }
-
-// Listen for push updates from main process
-window.api.onView(handleView)
-
-// Listen for annoyance shakes
-window.api.onAnnoy(() => {
-  const el = document.getElementById('pill')
-  el.classList.remove('shaking'); void el.offsetWidth; el.classList.add('shaking')
-  el.addEventListener('animationend', () => el.classList.remove('shaking'), { once: true })
-})
 
 // ── Card rendering ─────────────────────────────────────────────────────────
 function renderCard(card, stats, done, total) {
@@ -681,10 +985,16 @@ function renderCard(card, stats, done, total) {
   const badge = document.getElementById('type-badge')
   badge.textContent = card.type === 'concept' ? 'Concept' : 'Q&A'
   badge.className = `type-badge ${card.type}`
-  document.getElementById('question').textContent = card.front
-  document.getElementById('answer-text').textContent = card.back
+  setMarkdown(document.getElementById('question'), card.front)
+  setMarkdown(document.getElementById('answer-text'), card.back)
   document.getElementById('btn-reveal').style.display = ''
   document.getElementById('answer-area').style.display = 'none'
+  // reset type-answer
+  document.getElementById('type-answer-wrap').style.display = 'none'
+  document.getElementById('type-answer-input').value = ''
+  document.getElementById('eval-feedback').style.display = 'none'
+  document.getElementById('type-answer-toggle').style.display = card.type === 'qa' ? '' : 'none'
+  renderCardTags(card)
   closeEdit()
 }
 
@@ -701,20 +1011,24 @@ function reveal() {
 
 function vote(correct) {
   if (!currentCard) return
+  // Reset any eval-driven opacity before sending
+  document.getElementById('btn-right').style.opacity = ''
+  document.getElementById('btn-wrong').style.opacity = ''
   window.api.answer(currentCard.id, correct)
 }
 
 function switchTab(tab) {
-  if (tab === 'catalog') {
-    window.api.openCatalog()
-  } else {
-    window.api.expand()
-  }
+  if (tab === 'catalog')   window.api.openCatalog()
+  else if (tab === 'knowledge') window.api.openKnowledge()
+  else if (tab === 'analytics') window.api.openAnalytics()
+  else window.api.expand()
 }
 
 function setActiveTab(tab) {
   document.getElementById('tab-cards').classList.toggle('active', tab === 'card')
   document.getElementById('tab-catalog').classList.toggle('active', tab === 'catalog')
+  document.getElementById('tab-knowledge').classList.toggle('active', tab === 'knowledge')
+  document.getElementById('tab-analytics').classList.toggle('active', tab === 'analytics')
 }
 
 // ── Settings ───────────────────────────────────────────────────────────────
@@ -754,22 +1068,82 @@ async function runAutoTag() {
   }
 }
 
-window.api.getSettings().then(s => {
-  document.getElementById('r-interval').value = s.intervalMinutes
-  document.getElementById('v-interval').textContent = s.intervalMinutes + 'm'
-  document.getElementById('r-cps').value = s.cardsPerSession || 3
-  document.getElementById('v-cps').textContent = s.cardsPerSession || 3
-  document.getElementById('r-annoy').value = s.annoyanceLevel
-  document.getElementById('v-annoy').textContent = ['Off','Low','Med','High'][s.annoyanceLevel] || 'Med'
-  const login = s.launchAtLogin !== false ? 1 : 0
-  document.getElementById('r-login').value = login
-  document.getElementById('v-login').textContent = login ? 'On' : 'Off'
-  if (s.anthropicApiKey) document.getElementById('s-apikey').placeholder = 'sk-ant-… (saved)'
-  const ck = s.categoryClusterK || 8
-  document.getElementById('r-cluster').value = ck
-  document.getElementById('v-cluster').textContent = String(ck)
-  if (s.openaiApiKey) document.getElementById('s-openai-key').placeholder = 'sk-… (saved)'
-})
+// ── Knowledge view ─────────────────────────────────────────────────────────
+async function loadKnowledgeView() {
+  showLogList()
+  // Load chroma status
+  window.api.getChromaStatus().then(online => {
+    const el = document.getElementById('kb-db-status')
+    el.textContent = online ? '🟢 DB online' : '🔴 DB offline'
+    el.className = online ? 'kb-online' : 'kb-offline'
+  })
+  // Load logs
+  const logs = await window.api.getKnowledgeLogs()
+  document.getElementById('kb-log-count').textContent = `${logs.length} log${logs.length !== 1 ? 's' : ''}`
+  const list = document.getElementById('kb-list')
+  list.innerHTML = ''
+  if (!logs.length) {
+    list.innerHTML = '<div style="padding:20px 18px;color:var(--dim);font-size:13px">No logs yet. Use log_knowledge() during a session to add entries.</div>'
+    return
+  }
+  for (const log of logs) {
+    const row = document.createElement('div')
+    row.className = 'kb-log-row'
+    const tags = log.tags ? log.tags.replace(/[\[\]"]/g, '').split(',').map(t => t.trim()).filter(Boolean).join(' ') : ''
+    row.innerHTML = `
+      <div class="kb-log-problem">${escapeHtmlKb(log.problem)}</div>
+      <div class="kb-log-meta">
+        <span>${log.date || '—'}</span>
+        ${tags ? `<span class="kb-log-tags">${escapeHtmlKb(tags)}</span>` : ''}
+      </div>`
+    row.onclick = () => openLog(log.filename)
+    list.appendChild(row)
+  }
+}
+
+function showLogList() {
+  document.getElementById('kb-list-wrap').style.display = 'block'
+  document.getElementById('kb-detail').style.display = 'none'
+  document.getElementById('kb-results').style.display = 'none'
+}
+
+async function openLog(filename) {
+  const content = await window.api.getKnowledgeLog(filename)
+  if (!content) return
+  document.getElementById('kb-list-wrap').style.display = 'none'
+  document.getElementById('kb-results').style.display = 'none'
+  const detail = document.getElementById('kb-detail')
+  detail.style.display = 'flex'
+  detail.style.flexDirection = 'column'
+  setMarkdown(document.getElementById('kb-detail-content'), content)
+}
+
+function backToLogList() {
+  showLogList()
+}
+
+async function doKnowledgeSearch() {
+  const query = document.getElementById('kb-search').value.trim()
+  if (!query) return
+  document.getElementById('kb-list-wrap').style.display = 'none'
+  document.getElementById('kb-detail').style.display = 'none'
+  const results = document.getElementById('kb-results')
+  results.style.display = 'flex'
+  results.style.flexDirection = 'column'
+  document.getElementById('kb-results-query').textContent = `"${query}"`
+  document.getElementById('kb-results-content').innerHTML = '<div class="kb-searching"><div class="spin"></div>Searching…</div>'
+  const text = await window.api.searchKnowledge(query)
+  document.getElementById('kb-results-content').textContent = text
+}
+
+function clearKnowledgeSearch() {
+  document.getElementById('kb-search').value = ''
+  showLogList()
+}
+
+function escapeHtmlKb(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+}
 
 // ── Edit with AI (chat) ─────────────────────────────────────────────────────
 function editCard() {
@@ -785,11 +1159,12 @@ function editCard() {
   appendEditMsg('ai', 'Describe what you want changed, or ask for a sharper question and answer. I can return JSON in a code block when ready.')
 }
 
-function appendEditMsg(role, text) {
+function appendEditMsg(role, text, plain) {
   const wrap = document.getElementById('edit-messages')
   const div = document.createElement('div')
   div.className = 'edit-msg ' + (role === 'user' ? 'user' : 'ai')
-  div.textContent = text
+  if (plain) div.textContent = text
+  else div.innerHTML = window.api.renderMarkdown(text)
   wrap.appendChild(div)
   wrap.scrollTop = wrap.scrollHeight
 }
@@ -826,7 +1201,7 @@ async function sendEditChat() {
     appendEditMsg('ai', reply)
     tryParseJsonFromEdit(reply)
   } catch (err) {
-    appendEditMsg('ai', 'Error: ' + (err.message || 'request failed'))
+    appendEditMsg('ai', 'Error: ' + (err.message || 'request failed'), true)
   } finally {
     document.getElementById('edit-spinner').style.display = 'none'
   }
@@ -850,8 +1225,8 @@ async function acceptEdit() {
   }
   currentCard.front = front
   currentCard.back = back
-  document.getElementById('question').textContent = front
-  document.getElementById('answer-text').textContent = back
+  setMarkdown(document.getElementById('question'), front)
+  setMarkdown(document.getElementById('answer-text'), back)
   closeEdit()
 }
 
@@ -870,12 +1245,13 @@ function talkAbout() {
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────
-function appendMsg(id, cls, text) {
+function appendMsg(id, cls, text, plain) {
   const msgs = document.getElementById('chat-messages')
   const div  = document.createElement('div')
   div.className = 'msg ' + cls
   if (id) div.id = id
-  div.textContent = text
+  if (plain || cls.includes('thinking')) div.textContent = text
+  else div.innerHTML = window.api.renderMarkdown(text)
   msgs.appendChild(div)
   msgs.scrollTop = msgs.scrollHeight
 }
@@ -903,11 +1279,14 @@ async function chatSend() {
     chatHistory.push({ role: 'assistant', content: reply })
   } catch {
     document.getElementById(thinkId)?.remove()
-    appendMsg(null, 'ai', 'Error — is ANTHROPIC_API_KEY set?')
+    appendMsg(null, 'ai', 'Error — is ANTHROPIC_API_KEY set?', true)
   }
 }
 
 // ── Catalog ────────────────────────────────────────────────────────────────
+let activeTagFilters = new Set()
+let semanticSearchTimer = null
+
 function renderCatalog(data, stats) {
   // summary bar
   document.getElementById('cat-total').textContent  = stats.total
@@ -917,6 +1296,31 @@ function renderCatalog(data, stats) {
   const acc      = totalAns > 0 ? Math.round((stats.totalGot / totalAns) * 100) : 0
   document.getElementById('accuracy-label').textContent = acc + '% accuracy'
   document.getElementById('accuracy-bar-fill').style.width = acc + '%'
+
+  // Build tag filter pills
+  activeTagFilters = new Set()
+  const allTags = new Set()
+  for (const item of data) {
+    for (const t of (item.tags || [])) { if (t && t !== 'concept') allTags.add(t) }
+  }
+  const tagRow = document.getElementById('catalog-tag-row')
+  tagRow.innerHTML = ''
+  if (allTags.size > 0) {
+    const allPill = document.createElement('button')
+    allPill.className = 'tag-pill active'
+    allPill.id = 'tag-pill-all'
+    allPill.textContent = 'All'
+    allPill.onclick = () => { activeTagFilters.clear(); updateTagPillsUI(); applyCatalogFilters() }
+    tagRow.appendChild(allPill)
+    for (const tag of [...allTags].sort()) {
+      const pill = document.createElement('button')
+      pill.className = 'tag-pill'
+      pill.dataset.tag = tag
+      pill.textContent = tag
+      pill.onclick = () => toggleTagFilter(tag)
+      tagRow.appendChild(pill)
+    }
+  }
 
   renderCatalogList(data)
 }
@@ -957,7 +1361,7 @@ function renderCatalogList(data) {
     body.className = 'ci-body'
     const q = document.createElement('div')
     q.className = 'ci-q'
-    q.textContent = item.front
+    q.textContent = window.api.stripMarkdownPreview(item.front)
     if (item.tags && item.tags.length) {
       const tg = document.createElement('div')
       tg.className = 'ci-tags'
@@ -1027,23 +1431,297 @@ function renderCatalogList(data) {
   })
 }
 
+function toggleTagFilter(tag) {
+  if (activeTagFilters.has(tag)) activeTagFilters.delete(tag)
+  else activeTagFilters.add(tag)
+  updateTagPillsUI()
+  applyCatalogFilters()
+}
+
+function updateTagPillsUI() {
+  const allPill = document.getElementById('tag-pill-all')
+  if (allPill) allPill.classList.toggle('active', activeTagFilters.size === 0)
+  document.querySelectorAll('.tag-pill[data-tag]').forEach(p => {
+    p.classList.toggle('active', activeTagFilters.has(p.dataset.tag))
+  })
+}
+
+function applyTagFilter(data) {
+  if (!activeTagFilters.size) return data
+  return data.filter(c => {
+    const tags = (c.tags || []).filter(t => t && t !== 'concept')
+    return tags.some(t => activeTagFilters.has(t))
+  })
+}
+
+function onCatalogSearch(query) {
+  const q = query.trim()
+  clearTimeout(semanticSearchTimer)
+  if (!q) {
+    document.getElementById('catalog-search-mode').classList.remove('visible')
+    applyCatalogFilters()
+    return
+  }
+  // Try semantic search after short debounce, fallback to text
+  semanticSearchTimer = setTimeout(() => doSemanticOrTextSearch(q), 400)
+}
+
+async function doSemanticOrTextSearch(q) {
+  const result = await window.api.semanticSearchCards(q).catch(() => null)
+  if (result && result.ok) {
+    document.getElementById('catalog-search-mode').classList.add('visible')
+    const idxMap = {}
+    result.orderedIds.forEach((id, i) => { idxMap[id] = i })
+    let data = applyTagFilter(catalogData)
+    data = data.filter(c => idxMap[c.id] !== undefined)
+    data.sort((a, b) => (idxMap[a.id] ?? 999) - (idxMap[b.id] ?? 999))
+    renderCatalogList(data)
+  } else {
+    document.getElementById('catalog-search-mode').classList.remove('visible')
+    const ql = q.toLowerCase()
+    let data = catalogData.filter(c => {
+      if (c.front.toLowerCase().includes(ql)) return true
+      return (c.tags || []).some(t => String(t).toLowerCase().includes(ql))
+    })
+    data = applyTagFilter(data)
+    renderCatalogList(data)
+  }
+}
+
+function applyCatalogFilters() {
+  const q = document.getElementById('catalog-search').value.trim()
+  if (q) {
+    doSemanticOrTextSearch(q)
+    return
+  }
+  renderCatalogList(applyTagFilter(catalogData))
+}
+
 function filterCatalog(query) {
-  const q = query.toLowerCase()
-  const filtered = q
-    ? catalogData.filter(c => {
-        if (c.front.toLowerCase().includes(q)) return true
-        const tags = c.tags || []
-        return tags.some(t => String(t).toLowerCase().includes(q))
-      })
-    : catalogData
-  renderCatalogList(filtered)
+  onCatalogSearch(query)
+}
+
+// ── Card tag chips ──────────────────────────────────────────────────────────
+function renderCardTags(card) {
+  const row = document.getElementById('card-tags-row')
+  row.innerHTML = ''
+  if (card.type !== 'qa') return
+  const tags = card.tags || []
+  tags.forEach(tag => {
+    const chip = document.createElement('button')
+    chip.className = 'card-tag-chip'
+    chip.textContent = tag
+    chip.title = 'Click to remove'
+    chip.onclick = () => removeCardTag(card, tag)
+    row.appendChild(chip)
+  })
+  const addBtn = document.createElement('button')
+  addBtn.id = 'btn-tag-add'
+  addBtn.textContent = '+ tag'
+  addBtn.onclick = () => showTagInput(card)
+  row.appendChild(addBtn)
+  // tag input row (hidden)
+  const inputRow = document.createElement('div')
+  inputRow.id = 'tag-input-row'
+  const inp = document.createElement('input')
+  inp.id = 'tag-input'
+  inp.placeholder = 'tag name'
+  inp.onkeydown = (e) => { if (e.key === 'Enter') confirmTagAdd(card) }
+  const confirmBtn = document.createElement('button')
+  confirmBtn.id = 'btn-tag-confirm'
+  confirmBtn.textContent = 'Add'
+  confirmBtn.onclick = () => confirmTagAdd(card)
+  inputRow.appendChild(inp)
+  inputRow.appendChild(confirmBtn)
+  row.appendChild(inputRow)
+}
+
+function showTagInput(card) {
+  document.getElementById('tag-input-row').style.display = 'flex'
+  document.getElementById('btn-tag-add').style.display = 'none'
+  setTimeout(() => document.getElementById('tag-input')?.focus(), 50)
+}
+
+async function confirmTagAdd(card) {
+  const inp = document.getElementById('tag-input')
+  const tag = (inp.value || '').trim().toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+  if (!tag) return
+  const newTags = [...new Set([...(card.tags || []), tag])]
+  const r = await window.api.setCardTags(card.id, newTags)
+  if (r.ok) {
+    card.tags = newTags
+    renderCardTags(card)
+  }
+}
+
+async function removeCardTag(card, tag) {
+  const newTags = (card.tags || []).filter(t => t !== tag)
+  const r = await window.api.setCardTags(card.id, newTags)
+  if (r.ok) {
+    card.tags = newTags
+    renderCardTags(card)
+  }
+}
+
+// ── Type Answer / Evaluate ──────────────────────────────────────────────────
+function toggleTypeAnswer() {
+  const wrap = document.getElementById('type-answer-wrap')
+  const isOpen = wrap.style.display !== 'none'
+  wrap.style.display = isOpen ? 'none' : 'flex'
+  if (!isOpen) {
+    document.getElementById('type-answer-input').focus()
+    document.getElementById('btn-reveal').style.display = 'none'
+  } else {
+    document.getElementById('btn-reveal').style.display = ''
+  }
+}
+
+async function evaluateTypedAnswer() {
+  if (!currentCard) return
+  const answer = document.getElementById('type-answer-input').value.trim()
+  if (!answer) return
+  const btn = document.getElementById('btn-evaluate')
+  btn.disabled = true
+  btn.textContent = 'Evaluating…'
+  const fb = document.getElementById('eval-feedback')
+  fb.style.display = 'none'
+  try {
+    const r = await window.api.evaluateAnswer(currentCard.id, answer)
+    if (!r.ok) { fb.style.display = 'block'; fb.textContent = r.error || 'Error evaluating'; return }
+    const labels = ['✗ Incorrect', '~ Partial', '✓ Correct']
+    const scoreClass = ['eval-score-0','eval-score-1','eval-score-2'][r.score]
+    fb.className = scoreClass
+    fb.textContent = `${labels[r.score]} — ${r.feedback}`
+    fb.style.display = 'block'
+    // Reveal the answer
+    document.getElementById('type-answer-wrap').style.display = 'none'
+    document.getElementById('btn-reveal').style.display = 'none'
+    document.getElementById('answer-area').style.display = 'flex'
+    // Pre-highlight the appropriate verdict button
+    document.getElementById('btn-right').style.opacity  = r.score >= 2 ? '1' : '0.4'
+    document.getElementById('btn-wrong').style.opacity = r.score < 2  ? '1' : '0.4'
+  } catch (e) {
+    fb.style.display = 'block'
+    fb.textContent = 'Error: ' + e.message
+  } finally {
+    btn.disabled = false
+    btn.textContent = '✦ Evaluate with AI'
+  }
+}
+
+// ── Analytics ───────────────────────────────────────────────────────────────
+function renderAnalytics(data) {
+  if (!data) return
+  document.getElementById('an-reviews').textContent  = data.totalReviews
+  document.getElementById('an-accuracy').textContent = data.overallAccuracy + '%'
+  document.getElementById('an-streak').textContent   = data.streak
+  document.getElementById('an-days').textContent     = data.daysActive
+
+  // Activity chart
+  const canvas = document.getElementById('activity-chart')
+  const dpr = window.devicePixelRatio || 1
+  const W = canvas.parentElement.clientWidth || 400
+  const H = 60
+  canvas.width  = W * dpr
+  canvas.height = H * dpr
+  canvas.style.width  = W + 'px'
+  canvas.style.height = H + 'px'
+  const ctx = canvas.getContext('2d')
+  ctx.scale(dpr, dpr)
+  const days = data.activityByDay || []
+  const maxCount = Math.max(1, ...days.map(d => d.count))
+  const barW = Math.floor((W - 2) / days.length) - 1
+  ctx.clearRect(0, 0, W, H)
+  days.forEach((d, i) => {
+    const barH = Math.max(d.count > 0 ? 3 : 0, Math.round((d.count / maxCount) * (H - 8)))
+    const x = i * (barW + 1)
+    const y = H - barH - 4
+    const alpha = d.count > 0 ? 0.5 + (d.count / maxCount) * 0.5 : 0.1
+    ctx.fillStyle = `rgba(124,108,248,${alpha})`
+    ctx.beginPath()
+    ctx.roundRect(x, y, barW, barH, 2)
+    ctx.fill()
+  })
+
+  // Category bars
+  const list = document.getElementById('analytics-cat-list')
+  list.innerHTML = ''
+  if (!data.categoryStats.length) {
+    list.innerHTML = '<div style="color:var(--dim);font-size:12.5px">No answered cards yet.</div>'
+    return
+  }
+  for (const cat of data.categoryStats.slice(0, 20)) {
+    const color = cat.accuracy >= 80 ? '#34c759' : cat.accuracy >= 50 ? '#ff9f0a' : '#ff453a'
+    const row = document.createElement('div')
+    row.className = 'cat-row'
+    row.innerHTML = `
+      <div class="cat-row-top">
+        <span class="cat-name">${escapeHtmlKb(cat.tag)}</span>
+        <span class="cat-stats">${cat.accuracy}% &nbsp;·&nbsp; ${cat.got}✓ ${cat.miss}✗</span>
+      </div>
+      <div class="cat-bar-track">
+        <div class="cat-bar-fill" style="width:${cat.accuracy}%;background:${color}"></div>
+      </div>`
+    list.appendChild(row)
+  }
+}
+
+async function indexAllCards() {
+  const btn = document.getElementById('btn-index-cards')
+  btn.disabled = true
+  btn.textContent = 'Indexing…'
+  try {
+    const r = await window.api.indexCards()
+    btn.textContent = r.ok ? `✓ Indexed ${r.count} cards` : `Error: ${r.error}`
+    if (r.ok) setTimeout(() => { btn.textContent = '⚡ Index for Semantic Search'; btn.disabled = false }, 3000)
+    else btn.disabled = false
+  } catch (e) {
+    btn.textContent = 'Error — check API key'
+    btn.disabled = false
+  }
 }
 
 // ── PULL initial view on load ─────────────────────────────────────────────
-// This is the critical fix: by the time this line runs, all functions above
-// are defined and all DOM elements exist. We ask main for whatever view it
-// already set (e.g. 'catalog' on direct launch) and render it.
-window.api.getView().then(handleView)
+// Preload runs before this script, but in some builds the bridge appears one tick later — retry before showing an error.
+function bootstrapRenderer(attempt) {
+  attempt = attempt || 0
+  if (typeof window.api === 'undefined') {
+    if (attempt < 120) {
+      setTimeout(() => bootstrapRenderer(attempt + 1), 16)
+      return
+    }
+    const pq = document.getElementById('pill-q')
+    if (pq) pq.textContent = 'Preload did not expose the app bridge. Rebuild the app (bash setup.sh) or run from Terminal: npx electron .'
+    return
+  }
+  window.api.onView(handleView)
+  window.api.onAnnoy(() => {
+    const el = document.getElementById('pill')
+    el.classList.remove('shaking'); void el.offsetWidth; el.classList.add('shaking')
+    el.addEventListener('animationend', () => el.classList.remove('shaking'), { once: true })
+  })
+  window.api.getSettings().then(s => {
+    document.getElementById('r-interval').value = s.intervalMinutes
+    document.getElementById('v-interval').textContent = s.intervalMinutes + 'm'
+    document.getElementById('r-cps').value = s.cardsPerSession || 3
+    document.getElementById('v-cps').textContent = s.cardsPerSession || 3
+    document.getElementById('r-annoy').value = s.annoyanceLevel
+    document.getElementById('v-annoy').textContent = ['Off','Low','Med','High'][s.annoyanceLevel] || 'Med'
+    const login = s.launchAtLogin !== false ? 1 : 0
+    document.getElementById('r-login').value = login
+    document.getElementById('v-login').textContent = login ? 'On' : 'Off'
+    if (s.anthropicApiKey) document.getElementById('s-apikey').placeholder = 'sk-ant-… (saved)'
+    const ck = s.categoryClusterK || 8
+    document.getElementById('r-cluster').value = ck
+    document.getElementById('v-cluster').textContent = String(ck)
+    if (s.openaiApiKey) document.getElementById('s-openai-key').placeholder = 'sk-… (saved)'
+  }).catch(() => {})
+  window.api.getView().then(handleView).catch(() => {
+    const pq = document.getElementById('pill-q')
+    if (pq) pq.textContent = 'Could not load view state.'
+  })
+}
+bootstrapRenderer(0)
 </script>
 </body>
 </html>

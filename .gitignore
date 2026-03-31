@@ -1,0 +1,36 @@
+# Dependencies
+**/node_modules
+**/dist
+**/.venv
+
+# Python
+**/__pycache__
+*.pyc
+
+# Environment files
+.env
+**/.env
+!**/.env.example
+
+# ChromaDB data
+knowledge-mcp/chroma_db/
+knowledge-mcp/chroma-data/
+
+# Electron build artifacts
+study-notifier/build/
+study-notifier/dist-renderer/
+
+# Study card state (generated/ephemeral)
+study-cards/.card_embeddings.json
+study-cards/.card_state.json
+study-cards/.evaluation_log.json
+study-cards/.activity_log.json
+study-cards/.processed_logs.json
+
+# OS
+.DS_Store
+
+# IDE
+.cursor/
+.idea/
+.vscode/

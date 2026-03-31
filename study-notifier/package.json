@@ -5,16 +5,41 @@
   "author": "Tanner Hornsby",
   "main": "main.js",
   "scripts": {
-    "start": "electron .",
-    "build": "rm -rf dist && electron-builder --mac --dir",
+    "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "start": "vite build && electron .",
+    "build:renderer": "vite build",
+    "build": "vite build && rm -rf dist && electron-builder --mac --dir && rm -rf ~/Applications/Study\\ Notifier.app && cp -R dist/mac-arm64/Study\\ Notifier.app ~/Applications/",
     "setup": "bash setup.sh"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.27.0"
+    "@anthropic-ai/sdk": "^0.27.0",
+    "@tanstack/react-query": "^5.95.2",
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.3.3",
+    "highlight.js": "^11.11.0",
+    "marked": "^15.0.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "remove-markdown": "^0.6.0",
+    "sanitize-html": "^2.13.0"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/sanitize-html": "^2.16.1",
+    "@vitejs/plugin-react": "^6.0.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "concurrently": "^9.2.1",
     "electron": "^31.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "lucide-react": "^1.7.0",
+    "tailwind-merge": "^3.5.0",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.3",
+    "wait-on": "^9.0.4"
   },
   "build": {
     "appId": "app.doorlist.study-notifier",
@@ -22,7 +47,15 @@
     "mac": {
       "category": "public.app-category.education",
       "icon": "build/icons/icon.icns",
-      "target": [{ "target": "dir", "arch": ["arm64", "x64"] }]
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
     },
     "directories": {
       "output": "dist"
@@ -30,7 +63,7 @@
     "files": [
       "main.js",
       "preload.js",
-      "index.html",
+      "dist-renderer/**/*",
       "package.json",
       "node_modules/**/*"
     ]

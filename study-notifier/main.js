@@ -3,6 +3,7 @@ const path    = require('path')
 const fs      = require('fs')
 const os      = require('os')
 const crypto  = require('crypto')
+const { spawn } = require('child_process')
 const Anthropic = require('@anthropic-ai/sdk')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -14,11 +15,16 @@ function newId() {
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const RESEARCH_DIR  = path.join(os.homedir(), 'research')
-const CARDS_FILE    = path.join(RESEARCH_DIR, 'study-cards', 'qa_cards.tsv')
-const CONCEPT_FILE  = path.join(RESEARCH_DIR, 'study-cards', 'concept_cards.tsv')
-const STATE_FILE    = path.join(RESEARCH_DIR, 'study-cards', '.card_state.json')
-const SETTINGS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.settings.json')
+const RESEARCH_DIR       = path.join(os.homedir(), 'research')
+const CARDS_FILE         = path.join(RESEARCH_DIR, 'study-cards', 'qa_cards.tsv')
+const CONCEPT_FILE       = path.join(RESEARCH_DIR, 'study-cards', 'concept_cards.tsv')
+const STATE_FILE         = path.join(RESEARCH_DIR, 'study-cards', '.card_state.json')
+const SETTINGS_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.settings.json')
+const LOGS_DIR               = path.join(RESEARCH_DIR, 'problem-logs')
+const KNOWLEDGE_MCP_DIR      = path.join(RESEARCH_DIR, 'knowledge-mcp')
+const CARD_EMBEDDINGS_FILE   = path.join(RESEARCH_DIR, 'study-cards', '.card_embeddings.json')
+const EVAL_LOG_FILE          = path.join(RESEARCH_DIR, 'study-cards', '.evaluation_log.json')
+const ACTIVITY_FILE          = path.join(RESEARCH_DIR, 'study-cards', '.activity_log.json')
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULTS = {
@@ -38,19 +44,26 @@ let currentCard    = null
 let notifyTimer    = null
 let annoyTimer     = null
 let isExpanded     = false
-let sessionDone    = 0
-let sessionQueue   = []
+let sessionDone         = 0
+let sessionQueue        = []
+let chromaProc          = null
+let notificationSession = false  // true only when session was fired by the notification timer
+
+// First window from login-at-launch: show catalog in state for the renderer but keep the window hidden until activate
+let suppressShowOnFirstReady = false
 
 // The current desired view — renderer pulls this on load
 let currentView    = { type: 'hidden' }
 
-const PILL    = { w: 400, h: 84  }
-const CARD    = { w: 460, h: 580 }
-const CATALOG = { w: 460, h: 660 }
-const CHAT    = { w: 460, h: 580 }
+const PILL      = { w: 400, h: 84  }
+const CARD      = { w: 460, h: 580 }
+const CATALOG   = { w: 460, h: 660 }
+const CHAT      = { w: 460, h: 580 }
+const KNOWLEDGE = { w: 560, h: 700 }
+const ANALYTICS = { w: 460, h: 620 }
 
 function sizeForView(type) {
-  return { pill: PILL, card: CARD, catalog: CATALOG, chat: CHAT }[type] || CATALOG
+  return { pill: PILL, card: CARD, catalog: CATALOG, chat: CHAT, knowledge: KNOWLEDGE, analytics: ANALYTICS }[type] || CATALOG
 }
 
 // ── Anthropic client ──────────────────────────────────────────────────────────
@@ -58,6 +71,27 @@ function getAI() {
   const key = settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY
   if (!key) throw new Error('No API key — add it in ⚙ settings')
   return new Anthropic({ apiKey: key })
+}
+
+// ── ChromaDB auto-start ───────────────────────────────────────────────────────
+async function isChromaRunning() {
+  try {
+    const res = await fetch('http://localhost:8000/api/v2/heartbeat', { signal: AbortSignal.timeout(1500) })
+    return res.ok
+  } catch {
+    return false
+  }
+}
+
+async function startChroma() {
+  const running = await isChromaRunning()
+  if (running) return
+  const chromaBin = path.join(KNOWLEDGE_MCP_DIR, '.venv', 'bin', 'chroma')
+  const dbPath    = path.join(KNOWLEDGE_MCP_DIR, 'chroma_db')
+  if (!fs.existsSync(chromaBin)) return
+  chromaProc = spawn(chromaBin, ['run', '--path', dbPath], { detached: false, stdio: 'ignore' })
+  chromaProc.on('error', () => { chromaProc = null })
+  chromaProc.on('exit',  () => { chromaProc = null })
 }
 
 // ── File I/O ──────────────────────────────────────────────────────────────────
@@ -273,7 +307,9 @@ function deleteCardById(cardId) {
 }
 
 // ── Card logic ────────────────────────────────────────────────────────────────
-function pickCard(exclude = []) {
+// dutyOnly=true: returns null if no unseen/due cards (used for building notification sessions)
+// dutyOnly=false: falls back to random (used for manual catalog browsing)
+function pickCard(exclude = [], dutyOnly = false) {
   if (!cards.length) return null
   const now = Date.now()
   const pool = cards.filter(c => !exclude.includes(c.id))
@@ -288,6 +324,7 @@ function pickCard(exclude = []) {
     return due[0]
   }
 
+  if (dutyOnly) return null
   return pool[Math.floor(Math.random() * pool.length)]
 }
 
@@ -296,7 +333,7 @@ function buildSessionQueue() {
   const queue = []
   const seen  = []
   for (let i = 0; i < n; i++) {
-    const card = pickCard(seen)
+    const card = pickCard(seen, true)  // only unseen/due cards
     if (!card) break
     queue.push(card)
     seen.push(card.id)
@@ -320,6 +357,7 @@ function recordAnswer(cardId, correct) {
   s.lastSeen = Date.now()
   cardState[cardId] = s
   saveState()
+  trackActivity()
 }
 
 function getStats() {
@@ -331,6 +369,92 @@ function getStats() {
   const totalGot  = Object.values(cardState).reduce((n, s) => n + (s.gotCount  || 0), 0)
   const totalMiss = Object.values(cardState).reduce((n, s) => n + (s.missCount || 0), 0)
   return { total, seen, due, streak, totalGot, totalMiss }
+}
+
+// ── Activity tracking ─────────────────────────────────────────────────────────
+function trackActivity() {
+  const today = new Date().toISOString().slice(0, 10)
+  let data = {}
+  try { data = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8')) } catch {}
+  data[today] = (data[today] || 0) + 1
+  try {
+    fs.mkdirSync(path.dirname(ACTIVITY_FILE), { recursive: true })
+    fs.writeFileSync(ACTIVITY_FILE, JSON.stringify(data))
+  } catch {}
+}
+
+// ── Card embeddings ───────────────────────────────────────────────────────────
+function loadCardEmbeddings() {
+  try { return JSON.parse(fs.readFileSync(CARD_EMBEDDINGS_FILE, 'utf8')) } catch { return { embeddings: {} } }
+}
+
+function saveCardEmbeddings(data) {
+  fs.mkdirSync(path.dirname(CARD_EMBEDDINGS_FILE), { recursive: true })
+  fs.writeFileSync(CARD_EMBEDDINGS_FILE, JSON.stringify(data))
+}
+
+function cosineSim(a, b) {
+  // assumes pre-normalized unit vectors
+  let dot = 0
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) dot += a[i] * b[i]
+  return dot
+}
+
+// ── Eval log ──────────────────────────────────────────────────────────────────
+function loadEvalLog() {
+  try { return JSON.parse(fs.readFileSync(EVAL_LOG_FILE, 'utf8')) } catch { return [] }
+}
+
+function appendEvalLog(entry) {
+  const log = loadEvalLog()
+  log.push(entry)
+  try {
+    fs.mkdirSync(path.dirname(EVAL_LOG_FILE), { recursive: true })
+    fs.writeFileSync(EVAL_LOG_FILE, JSON.stringify(log, null, 2))
+  } catch {}
+}
+
+// ── Analytics ─────────────────────────────────────────────────────────────────
+function getAnalytics() {
+  const now = Date.now()
+  const allStates = Object.entries(cardState)
+  const totalReviews = allStates.reduce((n, [, s]) => n + (s.gotCount || 0) + (s.missCount || 0), 0)
+  const totalGot    = allStates.reduce((n, [, s]) => n + (s.gotCount  || 0), 0)
+  const overallAccuracy = totalReviews > 0 ? Math.round((totalGot / totalReviews) * 100) : 0
+  const streak = allStates.reduce((max, [, s]) => Math.max(max, s.streak || 0), 0)
+
+  const tagMap = {}
+  for (const card of cards) {
+    const s = cardState[card.id]
+    if (!s) continue
+    const got  = s.gotCount  || 0
+    const miss = s.missCount || 0
+    if (got + miss === 0) continue
+    const tags = (card.tags || []).filter(t => t && t !== 'concept')
+    const effectiveTags = tags.length ? tags : ['uncategorized']
+    for (const tag of effectiveTags) {
+      if (!tagMap[tag]) tagMap[tag] = { got: 0, miss: 0 }
+      tagMap[tag].got  += got
+      tagMap[tag].miss += miss
+    }
+  }
+  const categoryStats = Object.entries(tagMap).map(([tag, d]) => ({
+    tag, got: d.got, miss: d.miss, total: d.got + d.miss,
+    accuracy: Math.round((d.got / (d.got + d.miss)) * 100),
+  })).sort((a, b) => b.total - a.total)
+
+  let activityData = {}
+  try { activityData = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8')) } catch {}
+  const activityByDay = []
+  for (let i = 29; i >= 0; i--) {
+    const d   = new Date(now - i * 86400000)
+    const key = d.toISOString().slice(0, 10)
+    activityByDay.push({ date: key, count: activityData[key] || 0 })
+  }
+  const daysActive = Object.values(activityData).filter(v => v > 0).length
+
+  return { totalReviews, overallAccuracy, streak, daysActive, categoryStats, activityByDay }
 }
 
 function getCatalog() {
@@ -399,6 +523,10 @@ function resizeTo(dim) {
 
 function createWindow() {
   const { x, y } = getAnchor(CATALOG.w, CATALOG.h)
+  const preloadPath = path.resolve(__dirname, 'preload.js')
+  if (!fs.existsSync(preloadPath)) {
+    console.error('Study Notifier: preload.js missing at', preloadPath)
+  }
   win = new BrowserWindow({
     width: CATALOG.w, height: CATALOG.h, x, y,
     transparent: true,
@@ -412,11 +540,18 @@ function createWindow() {
     hasShadow: true,
     show: false,       // don't show until ready-to-show
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: preloadPath,
       contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
     }
   })
-  win.loadFile(path.join(__dirname, 'index.html'))
+  win.webContents.on('preload-error', (event, p, err) => {
+    console.error('Study Notifier preload-error', p, err)
+  })
+  const devUrl = process.env.VITE_DEV_SERVER_URL
+  if (devUrl) win.loadURL(devUrl)
+  else win.loadFile(path.join(__dirname, 'dist-renderer', 'index.html'))
   nativeTheme.themeSource = 'dark'
 
   const createdWin = win
@@ -428,17 +563,21 @@ function createWindow() {
   // (the renderer also pulls via getView, so this is belt-and-suspenders)
   win.once('ready-to-show', () => {
     if (!windowAlive()) return
-    if (currentView.type !== 'hidden') {
-      resizeTo(sizeForView(currentView.type))
-      if (currentView.type === 'pill') {
-        win.setAlwaysOnTop(true, 'floating')
-        win.showInactive()
-      } else {
-        win.show()
-        win.focus()
-      }
-      app.dock?.show()
+    if (currentView.type === 'hidden') return
+    resizeTo(sizeForView(currentView.type))
+    if (suppressShowOnFirstReady) {
+      suppressShowOnFirstReady = false
+      app.dock?.hide()
+      return
     }
+    if (currentView.type === 'pill') {
+      win.setAlwaysOnTop(true, 'floating')
+      win.showInactive()
+    } else {
+      win.show()
+      win.focus()
+    }
+    app.dock?.show()
   })
 }
 
@@ -494,6 +633,26 @@ function showCatalog() {
   win.show()
   win.focus()
   setView('catalog', { catalog: getCatalog(), stats: getStats() })
+}
+
+function showKnowledge() {
+  if (!windowAlive()) { ensureWindow() }
+  win.setAlwaysOnTop(false)
+  resizeTo(KNOWLEDGE)
+  app.dock?.show()
+  win.show()
+  win.focus()
+  setView('knowledge', {})
+}
+
+function showAnalytics() {
+  if (!windowAlive()) { ensureWindow() }
+  win.setAlwaysOnTop(false)
+  resizeTo(ANALYTICS)
+  app.dock?.show()
+  win.show()
+  win.focus()
+  setView('analytics', { analytics: getAnalytics() })
 }
 
 function showChat(card) {
@@ -553,6 +712,7 @@ function fireNotification() {
   sessionDone  = 0
   if (!sessionQueue.length) { scheduleNext(); return }
 
+  notificationSession = true
   currentCard = sessionQueue[0]
   showPill(currentCard)
 
@@ -581,6 +741,7 @@ ipcMain.on('open-card-from-catalog', (_, cardId) => {
     sessionDone = idx
     expandCard(card)
   } else {
+    notificationSession = false
     sessionQueue = [card]
     sessionDone = 0
     expandCard(card)
@@ -605,7 +766,12 @@ ipcMain.on('answer', (_, { cardId, correct }) => {
     if (isExpanded) expandCard(currentCard)
     else showPill(currentCard)
   } else {
-    hideWindow()
+    if (notificationSession) {
+      hideWindow()
+    } else {
+      notificationSession = false
+      showCatalog()
+    }
   }
 })
 
@@ -619,6 +785,139 @@ ipcMain.on('settings:save', (_, s) => {
 ipcMain.handle('settings:get', () => settings)
 ipcMain.handle('stats:get',    () => getStats())
 ipcMain.handle('catalog:get',  () => getCatalog())
+
+// ── Knowledge IPC ─────────────────────────────────────────────────────────────
+ipcMain.on('knowledge', () => showKnowledge())
+
+ipcMain.handle('knowledge:get-logs', () => {
+  if (!fs.existsSync(LOGS_DIR)) return []
+  return fs.readdirSync(LOGS_DIR)
+    .filter(f => f.endsWith('.md') && !f.startsWith('_'))
+    .sort((a, b) => b.localeCompare(a))
+    .map(filename => {
+      const content = fs.readFileSync(path.join(LOGS_DIR, filename), 'utf8')
+      const fm = {}
+      const m = content.match(/^---\n([\s\S]*?)\n---/)
+      if (m) {
+        for (const line of m[1].split('\n')) {
+          const i = line.indexOf(': ')
+          if (i > 0) fm[line.slice(0, i).trim()] = line.slice(i + 2).trim()
+        }
+      }
+      return { filename, date: fm.date || '', problem: fm.problem || filename, tags: fm.tags || '' }
+    })
+})
+
+ipcMain.handle('knowledge:get-log', (_, { filename }) => {
+  const full = path.join(LOGS_DIR, path.basename(filename))
+  return fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : null
+})
+
+ipcMain.handle('knowledge:search', (_, { query }) => {
+  return new Promise(resolve => {
+    const cliPath = path.join(KNOWLEDGE_MCP_DIR, 'cli.py')
+    const env = {
+      ...process.env,
+      OPENAI_API_KEY: settings.openaiApiKey || process.env.OPENAI_API_KEY || '',
+      ANTHROPIC_API_KEY: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '',
+    }
+    const proc = spawn('python3', [cliPath, 'search', '--query', query, '--n', '5'], { env })
+    let out = ''
+    proc.stdout.on('data', d => { out += d })
+    proc.stderr.on('data', d => { out += d })
+    proc.on('close', () => resolve(out.trim() || 'No results found.'))
+    proc.on('error', e => resolve(`Error: ${e.message}`))
+  })
+})
+
+ipcMain.handle('knowledge:chroma-status', () => isChromaRunning())
+
+// ── Analytics IPC ─────────────────────────────────────────────────────────────
+ipcMain.on('analytics', () => showAnalytics())
+ipcMain.handle('analytics:get', () => getAnalytics())
+
+// ── Card embeddings IPC ───────────────────────────────────────────────────────
+ipcMain.handle('cards:index-embeddings', async () => {
+  try {
+    const key = getOpenAIKey()
+    const texts = cards.map(c => `${c.front}\n${c.back}`.slice(0, 8000))
+    const vecs = await openaiEmbeddings(texts, key)
+    const data = { model: 'text-embedding-3-small', indexed_at: Date.now(), embeddings: {} }
+    for (let i = 0; i < cards.length; i++) {
+      data.embeddings[cards[i].id] = Array.from(vecs[i])
+    }
+    saveCardEmbeddings(data)
+    return { ok: true, count: cards.length }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
+
+ipcMain.handle('cards:semantic-search', async (_, { query }) => {
+  try {
+    const key = getOpenAIKey()
+    const embData = loadCardEmbeddings()
+    if (!Object.keys(embData.embeddings || {}).length) {
+      return { ok: false, error: 'No embeddings — run Index Cards first' }
+    }
+    const vecs = await openaiEmbeddings([query], key)
+    const qv = vecs[0]
+    const scores = []
+    for (const [cardId, emb] of Object.entries(embData.embeddings)) {
+      const v = new Float32Array(emb)
+      let norm = 0
+      for (let d = 0; d < v.length; d++) norm += v[d] * v[d]
+      norm = Math.sqrt(norm)
+      if (norm > 0) for (let d = 0; d < v.length; d++) v[d] /= norm
+      scores.push({ cardId, score: cosineSim(qv, v) })
+    }
+    scores.sort((a, b) => b.score - a.score)
+    return { ok: true, orderedIds: scores.map(s => s.cardId) }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
+
+ipcMain.handle('cards:set-tags', (_, { cardId, tags }) => {
+  const card = cards.find(c => c.id === cardId)
+  if (!card || card.type !== 'qa') return { ok: false }
+  const tagsStr = Array.isArray(tags) ? tags.join(' ') : String(tags)
+  const ok = saveQaTagsForRow(cardId, tagsStr)
+  return { ok: !!ok }
+})
+
+ipcMain.handle('answer:evaluate', async (_, { cardId, answer }) => {
+  const card = cards.find(c => c.id === cardId)
+  if (!card) return { ok: false, error: 'Card not found' }
+  try {
+    const ai = getAI()
+    const msg = await ai.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `You are evaluating a flashcard answer. Score it and give brief one-sentence feedback.
+
+Card question: ${card.front}
+
+Correct answer: ${card.back}
+
+Student's answer: ${answer}
+
+Score: 2 = fully correct, 1 = partially correct (key insight present but incomplete), 0 = incorrect.
+
+Return ONLY valid JSON: {"score":0|1|2,"feedback":"one sentence feedback"}`,
+      }],
+    })
+    let raw = msg.content[0].text.trim()
+    if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
+    const parsed = JSON.parse(raw)
+    appendEvalLog({ cardId, front: card.front, answer, score: parsed.score, feedback: parsed.feedback, ts: Date.now() })
+    return { ok: true, score: parsed.score, feedback: parsed.feedback }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
 
 // ── OpenAI embeddings + auto-tag ──────────────────────────────────────────────
 function getOpenAIKey() {
@@ -838,20 +1137,16 @@ app.whenReady().then(() => {
 
   const openedAsLoginItem = app.getLoginItemSettings().wasOpenedAtLogin
 
-  // Pre-set the desired view BEFORE creating the window.
-  // createWindow's ready-to-show handler will show it.
-  if (!openedAsLoginItem) {
-    currentView = { type: 'catalog', catalog: getCatalog(), stats: getStats() }
-  }
+  // Always set a real view before createWindow so ipc get-view never returns 'hidden' on first paint
+  // (renderer defaults to pill + "Loading…" until handleView runs).
+  suppressShowOnFirstReady = openedAsLoginItem
+  currentView = { type: 'catalog', catalog: getCatalog(), stats: getStats() }
 
   createWindow()
 
   app.setLoginItemSettings({ openAtLogin: !!settings.launchAtLogin, openAsHidden: true })
   scheduleNext()
-
-  if (openedAsLoginItem) {
-    app.dock?.hide()
-  }
+  startChroma()
 
   app.on('activate', () => {
     cardState = loadState()
@@ -875,3 +1170,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', e => e.preventDefault())
+
+app.on('before-quit', () => {
+  if (chromaProc) { chromaProc.kill(); chromaProc = null }
+})
