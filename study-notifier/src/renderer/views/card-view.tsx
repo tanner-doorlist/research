@@ -67,10 +67,25 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     }
   }, [])
 
-  // Load existing sessions on card change — start with clean thread
+  // Load existing sessions on card change — restore current session thread if one exists
   useEffect(() => {
     window.api.getSessions(card.id).then(sessions => {
       setPastSessions(sessions)
+    })
+    window.api.getCurrentSession(card.id).then(session => {
+      console.log('[card-view] loaded session for', card.id, session)
+      if (session?.messages?.length) {
+        setThread(session.messages.map((m: any) => ({
+          role: m.role,
+          content: m.content,
+          ts: m.ts || Date.now(),
+          score: m.score,
+        })))
+        setRevealed(true)
+        // Restore last AI score so spaced repetition doesn't double-record
+        const lastAiMsg = [...session.messages].reverse().find((m: any) => m.role === 'assistant' && m.score != null)
+        if (lastAiMsg) setLastScore(lastAiMsg.score)
+      }
     })
   }, [card.id])
 

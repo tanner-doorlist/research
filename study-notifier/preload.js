@@ -27,6 +27,8 @@ const api = {
   unflagCard:  (cardId)        => ipcRenderer.invoke('unflag-card', { cardId }),
   unretireCard:(cardId)        => ipcRenderer.invoke('unretire-card', { cardId }),
 
+  devFireNotification: () => ipcRenderer.invoke('dev:fire-notification'),
+  devSeedCards:        () => ipcRenderer.invoke('dev:seed-cards'),
   getView:     ()   => ipcRenderer.invoke('get-view'),
   onView:      (cb) => { const wrapped = (_, d) => cb(d); cb._wrapped = wrapped; ipcRenderer.on('view', wrapped) },
   offView:     (cb) => { ipcRenderer.removeListener('view', cb._wrapped || cb) },
