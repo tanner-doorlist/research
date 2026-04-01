@@ -26,7 +26,8 @@ async function initSchema() {
       id         TEXT PRIMARY KEY,
       card_id    TEXT NOT NULL,
       started_at BIGINT NOT NULL,
-      score      INTEGER
+      score      INTEGER,
+      gap_card_generated BOOLEAN NOT NULL DEFAULT false
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -78,6 +79,16 @@ async function initSchema() {
       created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS gap_card_feedback (
+      id         TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      card_front TEXT NOT NULL,
+      card_back  TEXT NOT NULL,
+      source_card_front TEXT NOT NULL,
+      approved   BOOLEAN NOT NULL,
+      reason     TEXT,
+      ts         BIGINT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS problem_logs (
       id              TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
       filename        TEXT UNIQUE NOT NULL,
@@ -107,6 +118,13 @@ async function initSchema() {
   await pool.query(`
     DO $$ BEGIN
       ALTER TABLE problem_logs ADD COLUMN embedding vector(1536);
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `)
+  // Add gap_card_generated column if missing
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE sessions ADD COLUMN gap_card_generated BOOLEAN NOT NULL DEFAULT false;
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `)
@@ -562,6 +580,41 @@ async function deleteCardConversations(cardId) {
   await pool.query('DELETE FROM sessions WHERE card_id = $1', [cardId])
 }
 
+async function getLowScoreSessions(cardIds) {
+  if (!cardIds.length) return []
+  const { rows: sessionRows } = await pool.query(
+    `SELECT s.*, c.front, c.back FROM sessions s
+     JOIN cards c ON c.id = s.card_id
+     WHERE s.card_id = ANY($1) AND s.score IS NOT NULL AND s.score <= 1
+     AND s.gap_card_generated = false
+     ORDER BY s.started_at DESC`,
+    [cardIds]
+  )
+  const sessions = []
+  for (const sr of sessionRows) {
+    const { rows: msgRows } = await pool.query(
+      'SELECT role, content FROM messages WHERE session_id = $1 ORDER BY ts ASC', [sr.id]
+    )
+    sessions.push({
+      id: sr.id,
+      cardId: sr.card_id,
+      cardFront: sr.front,
+      cardBack: sr.back,
+      score: sr.score,
+      messages: msgRows,
+    })
+  }
+  return sessions
+}
+
+async function markGapCardGenerated(sessionIds) {
+  if (!sessionIds.length) return
+  await pool.query(
+    'UPDATE sessions SET gap_card_generated = true WHERE id = ANY($1)',
+    [sessionIds]
+  )
+}
+
 // ── Settings ─────────────────────────────────────────────────────────────────
 async function getSettings(defaults) {
   const { rows } = await pool.query('SELECT key, value FROM settings')
@@ -658,6 +711,25 @@ async function saveCardEmbeddings(data) {
   }
 }
 
+// ── Gap Card Feedback ────────────────────────────────────────────────────────
+async function appendGapFeedback(entry) {
+  await pool.query(
+    `INSERT INTO gap_card_feedback (card_front, card_back, source_card_front, approved, reason, ts)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [entry.cardFront, entry.cardBack, entry.sourceCardFront, entry.approved, entry.reason || null, entry.ts]
+  )
+}
+
+async function getRecentDenials(limit = 5) {
+  const { rows } = await pool.query(
+    `SELECT card_front, source_card_front, reason FROM gap_card_feedback
+     WHERE approved = false AND reason IS NOT NULL
+     ORDER BY ts DESC LIMIT $1`,
+    [limit]
+  )
+  return rows
+}
+
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 async function close() {
   await pool.end()
@@ -667,11 +739,12 @@ module.exports = {
   pool, initSchema, migrateFromFiles, close,
   getAllCards, insertCard, updateCard, deleteCard, updateCardTags,
   getAllCardState, upsertCardState, deleteCardState,
-  getCardSessions, getCurrentSession, createSession, appendMessage, setSessionScore, deleteCardConversations,
+  getCardSessions, getCurrentSession, createSession, appendMessage, setSessionScore, deleteCardConversations, getLowScoreSessions, markGapCardGenerated,
   getSettings, saveAllSettings,
   trackActivity, getActivityLog,
   appendEvalEntry,
   getCardEmbeddings, saveCardEmbeddings,
   getAllProblemLogs, getProblemLog, upsertProblemLog, markLogMerged,
   getUnprocessedLogs, markLogProcessed,
+  appendGapFeedback, getRecentDenials,
 }

@@ -15,6 +15,7 @@ export const COMMANDS = [
   { name: 'skip', description: 'Skip to next card' },
   { name: 'next', description: 'Move to next card' },
   { name: 'score', description: 'Override AI score (0/1/2)' },
+  { name: 'conversations', description: 'View past conversations' },
   { name: 'edit', description: 'Edit this card' },
   { name: 'flag', description: 'Flag as bad card' },
   { name: 'category', description: 'Change category tag' },

@@ -215,6 +215,125 @@ function trackActivity() {
   db.trackActivity().catch(e => console.error('[db] track activity failed:', e))
 }
 
+// ── Gap card generation ──────────────────────────────────────────────────────
+let pendingGapCards = [] // queue of { id, front, back, tags, sourceCardFront, sessionId }
+
+async function generateGapCards(cardIds) {
+  try {
+    const lowSessions = await db.getLowScoreSessions(cardIds)
+    if (!lowSessions.length) return
+
+    const ai = getAI()
+
+    // Load recent denials to improve generation
+    const denials = await db.getRecentDenials(5)
+    let denialContext = ''
+    if (denials.length) {
+      denialContext = '\n\nThe user has previously rejected these suggested gap cards — learn from their feedback:\n' +
+        denials.map(d => `- Rejected: "${d.card_front}" (for card: "${d.source_card_front}") — Reason: ${d.reason}`).join('\n') +
+        '\n\nAvoid generating cards that would be rejected for similar reasons.\n'
+    }
+
+    for (const session of lowSessions) {
+      const convo = session.messages.map(m => `${m.role}: ${m.content}`).join('\n')
+      const prompt = `A student was quizzed on a flashcard and scored ${session.score}/2 (${session.score === 0 ? 'incorrect' : 'partial'}).
+
+Card question: ${session.cardFront}
+Correct answer: ${session.cardBack}
+
+Conversation:
+${convo}
+${denialContext}
+Based on this conversation, identify the specific knowledge gap — what did the student misunderstand, miss, or confuse?
+
+If there is a clear, targetable gap, generate ONE flashcard that would help fill it. The card should test the specific misunderstanding, NOT just repeat the original question. It might test a prerequisite concept, a distinction the student conflated, or a detail they overlooked.
+
+If there's not enough signal to generate a useful card (e.g. the student just didn't attempt an answer, or the gap is too vague), return {"skip": true}.
+
+Return ONLY valid JSON:
+{"skip": false, "front": "question targeting the gap", "back": "concise answer", "tags": ["gap-fill"]}`
+
+      try {
+        const msg = await ai.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 400,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        let raw = msg.content[0].text.trim()
+        if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
+        const parsed = JSON.parse(raw)
+
+        if (!parsed.skip && parsed.front) {
+          const suggestion = {
+            id: newId(),
+            front: parsed.front,
+            back: parsed.back || '',
+            tags: [...(parsed.tags || []), 'gap-fill'],
+            sourceCardFront: session.cardFront,
+            sessionId: session.id,
+          }
+          pendingGapCards.push(suggestion)
+          // Send to renderer
+          if (win) win.webContents.send('gap-card-suggestion', suggestion)
+          console.log(`[gap-cards] Suggested: ${parsed.front.slice(0, 60)}...`)
+        } else {
+          // No card generated — mark session as processed
+          await db.markGapCardGenerated([session.id])
+        }
+      } catch (e) {
+        console.error(`[gap-cards] Failed for session ${session.id}:`, e.message)
+        await db.markGapCardGenerated([session.id])
+      }
+    }
+  } catch (e) {
+    console.error('[gap-cards] Error:', e.message)
+  }
+}
+
+// Approve a suggested gap card
+ipcMain.handle('gap-card:approve', async (_, { id }) => {
+  const idx = pendingGapCards.findIndex(c => c.id === id)
+  if (idx === -1) return { ok: false }
+  const suggestion = pendingGapCards.splice(idx, 1)[0]
+
+  await db.insertCard({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  cardState[suggestion.id] = { interval: 1, streak: 0, gotCount: 0, missCount: 0, nextReview: Date.now() }
+  persistCardState(suggestion.id)
+  cards.push({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  await db.markGapCardGenerated([suggestion.sessionId])
+  await db.appendGapFeedback({
+    cardFront: suggestion.front, cardBack: suggestion.back,
+    sourceCardFront: suggestion.sourceCardFront, approved: true, ts: Date.now(),
+  })
+
+  // Send next suggestion if queued
+  if (pendingGapCards.length && win) {
+    win.webContents.send('gap-card-suggestion', pendingGapCards[0])
+  }
+
+  return { ok: true }
+})
+
+// Deny a suggested gap card
+ipcMain.handle('gap-card:deny', async (_, { id, reason }) => {
+  const idx = pendingGapCards.findIndex(c => c.id === id)
+  if (idx === -1) return { ok: false }
+  const suggestion = pendingGapCards.splice(idx, 1)[0]
+
+  await db.markGapCardGenerated([suggestion.sessionId])
+  await db.appendGapFeedback({
+    cardFront: suggestion.front, cardBack: suggestion.back,
+    sourceCardFront: suggestion.sourceCardFront, approved: false, reason: reason || null, ts: Date.now(),
+  })
+
+  // Send next suggestion if queued
+  if (pendingGapCards.length && win) {
+    win.webContents.send('gap-card-suggestion', pendingGapCards[0])
+  }
+
+  return { ok: true }
+})
+
 // ── Card embeddings ───────────────────────────────────────────────────────────
 async function loadCardEmbeddings() {
   return db.getCardEmbeddings()
@@ -590,6 +709,10 @@ ipcMain.on('answer', (_, { cardId, correct }) => {
     if (isExpanded) expandCard(currentCard)
     else showPill(currentCard)
   } else {
+    // Session ended — generate gap cards in background (fire-and-forget)
+    const finishedCardIds = sessionQueue.map(c => c.id)
+    generateGapCards(finishedCardIds)
+
     if (notificationSession) {
       hideWindow()
     } else {

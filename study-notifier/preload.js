@@ -58,6 +58,10 @@ const api = {
   getCurrentSession:    (cardId) => ipcRenderer.invoke('conversation:get-current', { cardId }),
   startSession:         (cardId) => ipcRenderer.invoke('conversation:start', { cardId }),
   clearConversation:    (cardId) => ipcRenderer.invoke('conversation:clear', { cardId }),
+  onGapCardSuggestion:  (cb) => { const wrapped = (_, d) => cb(d); cb._wrapped = wrapped; ipcRenderer.on('gap-card-suggestion', wrapped) },
+  offGapCardSuggestion: (cb) => { ipcRenderer.removeListener('gap-card-suggestion', cb._wrapped || cb) },
+  approveGapCard:       (id) => ipcRenderer.invoke('gap-card:approve', { id }),
+  denyGapCard:          (id, reason) => ipcRenderer.invoke('gap-card:deny', { id, reason }),
 }
 
 try {

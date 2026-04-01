@@ -34,7 +34,10 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
   // Conversation state
   const [pastSessions, setPastSessions] = useState<ConversationSession[]>([])
   const [thread, setThread] = useState<ConversationMessage[]>([])
-  const [showHistory, setShowHistory] = useState(false)
+  const [viewingSession, setViewingSession] = useState<ConversationSession | null>(null)
+  const [conversationsOpen, setConversationsOpen] = useState(false)
+  const [conversationsIdx, setConversationsIdx] = useState(0)
+  const conversationsRef = useRef<HTMLDivElement>(null)
 
   // Popover state
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
@@ -50,24 +53,14 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     setInput(''); setRevealed(false); setEvaluating(false); setLastScore(null)
     setMenuOpen(false); setDetailOpen(false); setEditOpen(false); setConfirmDelete(false)
     setMentionQuery(null); setSlashQuery(null)
-    setThread([]); setPastSessions([]); setShowHistory(false)
+    setThread([]); setPastSessions([]); setViewingSession(null); setConversationsOpen(false)
   }
 
-  // Load existing sessions and catalog on card change
+  // Load existing sessions and catalog on card change — start with clean thread
   useEffect(() => {
     window.api.getCatalog().then(setCatalog)
     window.api.getSessions(card.id).then(sessions => {
-      if (sessions.length > 0) {
-        // Current session = last one, past = everything before
-        const current = sessions[sessions.length - 1]
-        const past = sessions.slice(0, -1)
-        setPastSessions(past)
-        setThread(current.messages)
-        if (current.messages.length > 0) {
-          setRevealed(true)
-          if (current.score !== null && current.score >= 0) setLastScore(current.score)
-        }
-      }
+      setPastSessions(sessions)
     })
   }, [card.id])
 
@@ -83,6 +76,14 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [menuOpen])
+
+  // Close conversations popover on outside click
+  useEffect(() => {
+    if (!conversationsOpen) return
+    const handler = (e: MouseEvent) => { if (conversationsRef.current && !conversationsRef.current.contains(e.target as Node)) setConversationsOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [conversationsOpen])
 
   // Build mention candidates from catalog
   const mentionItems: FilterableItem[] = (() => {
@@ -151,6 +152,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
         }
         break
       }
+      case 'conversations': setConversationsOpen(true); setConversationsIdx(0); break
       case 'flag': await window.api.flagCard(card.id); break
       case 'delete': setConfirmDelete(true); break
       case 'category': setDetailOpen(true); break
@@ -185,12 +187,22 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
 
   // Keyboard nav for popover
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (conversationsOpen) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setConversationsIdx(i => Math.min(i + 1, pastSessions.length - 1)) }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setConversationsIdx(i => Math.max(i - 1, 0)) }
+      else if (e.key === 'Enter') { e.preventDefault(); if (pastSessions[conversationsIdx]) { setViewingSession(pastSessions[conversationsIdx]); setConversationsOpen(false) } }
+      else if (e.key === 'Escape') { e.preventDefault(); setConversationsOpen(false) }
+      return
+    }
     if (popoverOpen) {
       if (e.key === 'ArrowDown') { e.preventDefault(); setPopoverIdx(i => Math.min(i + 1, popoverItems.length - 1)) }
       else if (e.key === 'ArrowUp') { e.preventDefault(); setPopoverIdx(i => Math.max(i - 1, 0)) }
       else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); selectPopoverItem(popoverIdx) }
       else if (e.key === 'Escape') { e.preventDefault(); setMentionQuery(null); setSlashQuery(null) }
       return
+    }
+    if (viewingSession && e.key === 'Escape') {
+      e.preventDefault(); setViewingSession(null); return
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -216,6 +228,10 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
       executeCommand('skip' as CommandName)
       return
     }
+    if (/^\/conversations?\b/.test(trimmed)) {
+      executeCommand('conversations' as CommandName)
+      return
+    }
 
     const plain = getPlainAnswer(input)
     if (!plain && !trimmed) return
@@ -223,8 +239,8 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     const isFollowUp = revealed
     const userText = trimmed
 
-    // Start a new session if this is a fresh answer on a card with past sessions
-    if (!isFollowUp && pastSessions.length > 0 && thread.length === 0) {
+    // Start a new session if this is a fresh answer (not a follow-up)
+    if (!isFollowUp && thread.length === 0) {
       await window.api.startSession(card.id)
     }
 
@@ -343,76 +359,64 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
 
       {/* Main content area — question + conversation thread */}
       <div className="flex-1 px-[var(--spacing-x)] py-[var(--spacing-y)] flex flex-col overflow-y-auto min-h-0">
+        {/* Viewing past session banner */}
+        {viewingSession && (
+          <div className="flex items-center gap-2 mb-2 px-2.5 py-1.5 rounded-[var(--radius-md)] bg-surface border border-border shrink-0 animate-fade-up">
+            <span className="text-[11px] text-text-tertiary flex-1">
+              Session from {new Date(viewingSession.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+              {viewingSession.score !== null && (
+                <span className={`ml-2 font-medium ${viewingSession.score === 0 ? 'text-danger' : viewingSession.score === 1 ? 'text-warning' : 'text-success'}`}>
+                  {['✗ Incorrect', '~ Partial', '✓ Correct'][viewingSession.score]}
+                </span>
+              )}
+            </span>
+            <button onClick={() => setViewingSession(null)}
+              className="text-[11px] text-accent font-medium bg-transparent border-none cursor-pointer hover:text-accent/80 transition-colors">
+              Back
+            </button>
+          </div>
+        )}
+
         {/* Question */}
         <div className="text-[15px] leading-[1.6] font-normal shrink-0">
           <MarkdownRender content={card.front} />
         </div>
 
-        {/* Past sessions toggle */}
-        {pastSessions.length > 0 && (
-          <button onClick={() => setShowHistory(!showHistory)}
-            className="self-start mt-2 text-[10px] text-text-tertiary hover:text-text-secondary bg-transparent border-none cursor-pointer transition-colors">
-            {showHistory ? '▾' : '▸'} {pastSessions.length} past {pastSessions.length === 1 ? 'session' : 'sessions'}
-          </button>
-        )}
-
-        {/* Past sessions */}
-        {showHistory && pastSessions.map((session) => (
-          <div key={session.id} className="mt-2 mb-1 border-l-2 border-border/50 pl-3">
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className="text-[9px] text-text-tertiary">
-                {new Date(session.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-              </span>
-              {session.score !== null && (
-                <span className={`text-[9px] font-medium ${session.score === 0 ? 'text-danger' : session.score === 1 ? 'text-warning' : 'text-success'}`}>
-                  {['✗', '~', '✓'][session.score]}
-                </span>
+        {/* Conversation thread — either viewing a past session or current */}
+        {(() => {
+          const displayThread = viewingSession ? viewingSession.messages : thread
+          return displayThread.length > 0 && (
+            <div className={`flex flex-col gap-2 mt-3 ${viewingSession ? 'opacity-70' : ''}`}>
+              {displayThread.map((msg, i) => (
+                <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[85%] px-3 py-2 rounded-[var(--radius-lg)] text-[12px] leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-accent/15 text-text-primary rounded-br-[4px]'
+                      : msg.score === 0 ? 'bg-danger/[0.08] text-text-secondary border border-danger/15 rounded-bl-[4px]'
+                      : msg.score === 1 ? 'bg-warning/[0.08] text-text-secondary border border-warning/15 rounded-bl-[4px]'
+                      : msg.score === 2 ? 'bg-success/[0.08] text-text-secondary border border-success/15 rounded-bl-[4px]'
+                      : 'bg-surface text-text-secondary border border-border rounded-bl-[4px]'
+                  }`}>
+                    <MarkdownRender content={msg.content} />
+                  </div>
+                </div>
+              ))}
+              {!viewingSession && evaluating && (
+                <div className="flex justify-start">
+                  <div className="px-3 py-2 rounded-[var(--radius-lg)] rounded-bl-[4px] bg-surface border border-border">
+                    <Spinner />
+                  </div>
+                </div>
               )}
+              <div ref={threadEndRef} />
             </div>
-            {session.messages.map((msg, j) => (
-              <div key={j} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} mb-1`}>
-                <div className={`max-w-[85%] px-2.5 py-1.5 rounded-[var(--radius-md)] text-[11px] leading-relaxed opacity-60 ${
-                  msg.role === 'user' ? 'bg-accent/10 text-text-primary' : 'bg-surface text-text-secondary border border-border/50'
-                }`}>
-                  <MarkdownRender content={msg.content} />
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
-
-        {/* Current conversation thread */}
-        {thread.length > 0 && (
-          <div className="flex flex-col gap-2 mt-3">
-            {thread.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[85%] px-3 py-2 rounded-[var(--radius-lg)] text-[12px] leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-accent/15 text-text-primary rounded-br-[4px]'
-                    : msg.score === 0 ? 'bg-danger/[0.08] text-text-secondary border border-danger/15 rounded-bl-[4px]'
-                    : msg.score === 1 ? 'bg-warning/[0.08] text-text-secondary border border-warning/15 rounded-bl-[4px]'
-                    : msg.score === 2 ? 'bg-success/[0.08] text-text-secondary border border-success/15 rounded-bl-[4px]'
-                    : 'bg-surface text-text-secondary border border-border rounded-bl-[4px]'
-                }`}>
-                  <MarkdownRender content={msg.content} />
-                </div>
-              </div>
-            ))}
-            {evaluating && (
-              <div className="flex justify-start">
-                <div className="px-3 py-2 rounded-[var(--radius-lg)] rounded-bl-[4px] bg-surface border border-border">
-                  <Spinner />
-                </div>
-              </div>
-            )}
-            <div ref={threadEndRef} />
-          </div>
-        )}
+          )
+        })()}
 
         <div className="flex-1 min-h-3" />
 
         {/* Answer reveal (after first eval) */}
-        {revealed && (
+        {revealed && !viewingSession && (
           <div className="flex flex-col gap-3 animate-fade-up shrink-0">
             <div className="w-full h-px bg-border" />
             <div className="text-[13px] leading-[1.65] text-text-secondary">
@@ -425,7 +429,45 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
       {/* Prompt input — always visible */}
       <div className="px-[var(--spacing-x)] pb-2 pt-1 shrink-0 border-t border-border">
         <div className="relative">
-          {/* Popover */}
+          {/* Conversations popover */}
+          {conversationsOpen && (
+            <div ref={conversationsRef}
+              className="absolute bottom-full left-0 right-0 mb-1 bg-[rgba(30,30,34,0.97)] backdrop-blur-xl border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-[0_4px_24px_rgba(0,0,0,0.4)] z-50 max-h-64 overflow-y-auto">
+              <div className="px-3 py-1.5 border-b border-border">
+                <span className="text-[11px] font-semibold text-text-secondary">Past conversations</span>
+                <span className="text-[10px] text-text-tertiary ml-2">({pastSessions.length})</span>
+              </div>
+              {pastSessions.length === 0 ? (
+                <div className="px-3 py-3 text-[11px] text-text-tertiary text-center">No past conversations for this card.</div>
+              ) : (
+                [...pastSessions].reverse().map((session, i) => (
+                  <button key={session.id} onClick={() => { setViewingSession(session); setConversationsOpen(false) }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 border-none cursor-pointer text-left transition-colors ${
+                      i === conversationsIdx ? 'bg-accent/15 text-text-primary' : 'bg-transparent text-text-secondary hover:bg-surface'
+                    }`}>
+                    <span className={`w-2 h-2 rounded-full shrink-0 ${
+                      session.score === 0 ? 'bg-danger' : session.score === 1 ? 'bg-warning' : session.score === 2 ? 'bg-success' : 'bg-text-tertiary'
+                    }`} />
+                    <span className="text-[12px]">
+                      {new Date(session.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                    </span>
+                    <span className="text-[10px] text-text-tertiary ml-1">
+                      {session.messages.length} msg{session.messages.length !== 1 ? 's' : ''}
+                    </span>
+                    {session.score !== null && (
+                      <span className={`text-[10px] font-medium ml-auto ${
+                        session.score === 0 ? 'text-danger' : session.score === 1 ? 'text-warning' : 'text-success'
+                      }`}>
+                        {['✗', '~', '✓'][session.score]}
+                      </span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Mention/command popover */}
           {popoverOpen && (
             <div ref={popoverRef}
               className="absolute bottom-full left-0 right-0 mb-1 bg-[rgba(30,30,34,0.97)] backdrop-blur-xl border border-border rounded-[var(--radius-lg)] overflow-hidden shadow-[0_4px_24px_rgba(0,0,0,0.4)] z-50 max-h-48 overflow-y-auto">
@@ -460,12 +502,12 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
               value={input}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={revealed ? "Follow up, /score, /next..." : "Type your answer..."}
+              placeholder={viewingSession ? "Viewing past session — press Esc to go back" : revealed ? "Follow up, /score, /next..." : "Type your answer..."}
               rows={2}
-              disabled={evaluating}
+              disabled={evaluating || !!viewingSession}
               className="flex-1 bg-surface border border-border rounded-[var(--radius-md)] text-text-primary text-[13px] px-3 py-2 outline-none resize-none min-h-[44px] max-h-[120px] leading-relaxed focus:border-accent/40 transition-colors disabled:opacity-50"
             />
-            <button onClick={submitMessage} disabled={evaluating || !input.trim()}
+            <button onClick={submitMessage} disabled={evaluating || !input.trim() || !!viewingSession}
               className="h-[44px] w-9 border-none rounded-[var(--radius-md)] bg-accent text-white cursor-pointer flex items-center justify-center shrink-0 hover:brightness-110 disabled:opacity-30 transition-all">
               {evaluating ? <Spinner /> : '↑'}
             </button>

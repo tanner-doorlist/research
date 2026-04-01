@@ -97,6 +97,14 @@ export interface ConversationSession {
   messages: ConversationMessage[]
 }
 
+export interface GapCardSuggestion {
+  id: string
+  front: string
+  back: string
+  tags: string[]
+  sourceCardFront: string
+}
+
 export interface ElectronAPI {
   expand: () => void
   dismiss: () => void
@@ -137,6 +145,11 @@ export interface ElectronAPI {
   getCurrentSession: (cardId: string) => Promise<ConversationSession | null>
   startSession: (cardId: string) => Promise<ConversationSession>
   clearConversation: (cardId: string) => Promise<{ ok: boolean }>
+
+  onGapCardSuggestion: (cb: (suggestion: GapCardSuggestion) => void) => void
+  offGapCardSuggestion: (cb: (suggestion: GapCardSuggestion) => void) => void
+  approveGapCard: (id: string) => Promise<{ ok: boolean }>
+  denyGapCard: (id: string, reason?: string) => Promise<{ ok: boolean }>
 
   getView: () => Promise<ViewState>
   onView: (cb: (v: ViewState) => void) => void
