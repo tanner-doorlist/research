@@ -9,37 +9,23 @@ Usage:
     python3 index_existing.py
 """
 
-import os
 import sys
-from pathlib import Path
 
-from dotenv import load_dotenv
-from openai import OpenAI
-
-import db as pgdb
-
-load_dotenv(Path(__file__).parent / ".env")
-
-EMBED_MODEL = "text-embedding-3-small"
-openai_client = OpenAI()
-
-
-def embed(text: str) -> list[float]:
-    resp = openai_client.embeddings.create(
-        model=EMBED_MODEL,
-        input=text[:8000],
-    )
-    return resp.data[0].embedding
+from knowledge_scribe.core import embed
+from knowledge_scribe.db import get_db
 
 
 def main():
-    conn = pgdb.get_conn()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT filename, content FROM problem_logs WHERE embedding IS NULL AND merged_into IS NULL"
-        )
-        rows = cur.fetchall()
-    conn.close()
+    db = get_db()
+    conn = db.get_conn_raw()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT filename, content FROM problem_logs WHERE embedding IS NULL AND merged_into IS NULL"
+            )
+            rows = cur.fetchall()
+    finally:
+        db.put_conn_raw(conn)
 
     if not rows:
         print("All logs already have embeddings.")
@@ -50,7 +36,7 @@ def main():
     for filename, content in rows:
         try:
             vec = embed(content)
-            pgdb.update_embedding(filename, vec)
+            db.update_log_embedding(filename, vec)
             print(f"  + {filename}")
         except Exception as e:
             print(f"  SKIP {filename}: {e}")

@@ -5,6 +5,7 @@ import { Shell } from './components/shell'
 import { Titlebar } from './components/titlebar'
 import { SettingsPanel } from './components/settings-panel'
 import { GapCardToast } from './components/gap-card-toast'
+import { ErrorBoundary } from './components/error-boundary'
 import { PillView } from './views/pill-view'
 import { CardView } from './views/card-view'
 import { CatalogView } from './views/catalog-view'
@@ -34,49 +35,51 @@ export default function App() {
   const showBack = view.type === 'chat'
 
   return (
-    <div className={cn('w-full h-full', shaking && 'animate-shake')}>
-      <Shell viewType={view.type}>
-        {/* Card view has its own menu — no titlebar */}
-        {!isCard && (
-          <Titlebar
-            viewType={view.type}
-            showBack={showBack}
-            settingsOpen={settingsOpen}
-            onToggleSettings={() => setSettingsOpen(!settingsOpen)}
-          />
-        )}
+    <ErrorBoundary>
+      <div className={cn('w-full h-full', shaking && 'animate-shake')}>
+        <Shell viewType={view.type}>
+          {/* Card view has its own menu — no titlebar */}
+          {!isCard && (
+            <Titlebar
+              viewType={view.type}
+              showBack={showBack}
+              settingsOpen={settingsOpen}
+              onToggleSettings={() => setSettingsOpen(!settingsOpen)}
+            />
+          )}
 
-        {isCard && view.card && view.stats && (
-          <CardView
-            card={view.card}
-            stats={view.stats}
-            sessionDone={view.sessionDone ?? 0}
-            sessionTotal={view.sessionTotal ?? 0}
-          />
-        )}
+          {isCard && view.card && view.stats && (
+            <CardView
+              card={view.card}
+              stats={view.stats}
+              sessionDone={view.sessionDone ?? 0}
+              sessionTotal={view.sessionTotal ?? 0}
+            />
+          )}
 
-        {view.type === 'catalog' && view.catalog && view.stats && (
-          <CatalogView catalog={view.catalog} stats={view.stats} />
-        )}
+          {view.type === 'catalog' && view.catalog && view.stats && (
+            <CatalogView catalog={view.catalog} stats={view.stats} />
+          )}
 
-        {view.type === 'chat' && view.card && (
-          <ChatView card={view.card} />
-        )}
+          {view.type === 'chat' && view.card && (
+            <ChatView card={view.card} />
+          )}
 
-        {view.type === 'knowledge' && <KnowledgeView />}
+          {view.type === 'knowledge' && <KnowledgeView />}
 
-        {view.type === 'analytics' && view.analytics && (
-          <AnalyticsView analytics={view.analytics} />
-        )}
+          {view.type === 'analytics' && view.analytics && (
+            <AnalyticsView analytics={view.analytics} />
+          )}
 
-        {!isCard && (
-          <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        )}
+          {!isCard && (
+            <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+          )}
 
-        {gapSuggestion && (
-          <GapCardToast suggestion={gapSuggestion} onDone={() => setGapSuggestion(null)} />
-        )}
-      </Shell>
-    </div>
+          {gapSuggestion && (
+            <GapCardToast suggestion={gapSuggestion} onDone={() => setGapSuggestion(null)} />
+          )}
+        </Shell>
+      </div>
+    </ErrorBoundary>
   )
 }

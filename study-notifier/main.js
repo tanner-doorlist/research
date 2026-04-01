@@ -15,6 +15,15 @@ function newId() {
   return crypto.randomUUID()
 }
 
+// ── Utilities ────────────────────────────────────────────────────────────────
+function normalizeVector(v) {
+  let norm = 0
+  for (let i = 0; i < v.length; i++) norm += v[i] * v[i]
+  norm = Math.sqrt(norm)
+  if (norm > 0) for (let i = 0; i < v.length; i++) v[i] /= norm
+  return v
+}
+
 // ── Paths ─────────────────────────────────────────────────────────────────────
 const RESEARCH_DIR       = process.env.RESEARCH_DIR || path.join(os.homedir(), 'research')
 const KNOWLEDGE_MCP_DIR  = path.join(RESEARCH_DIR, 'knowledge-mcp')
@@ -58,6 +67,41 @@ let suppressShowOnFirstReady = false
 // The current desired view — renderer pulls this on load
 let currentView    = { type: 'hidden' }
 
+// ── Caching ──────────────────────────────────────────────────────────────────
+let catalogCache = null
+let catalogDirty = true
+let statsCache = null
+let statsDirty = true
+
+function invalidateCaches() {
+  catalogDirty = true
+  statsDirty = true
+}
+
+// ── Session advancement helper ───────────────────────────────────────────────
+// Shared by delete-card and flag-card: advance to next card in session or show catalog/hide
+function advanceSessionOrEnd() {
+  if (currentView.type === 'card') {
+    const nextIdx = sessionQueue.findIndex((c, i) => i >= sessionDone)
+    if (nextIdx >= 0) {
+      currentCard = sessionQueue[nextIdx]
+      expandCard(currentCard)
+    } else if (notificationSession) {
+      hideWindow()
+    } else {
+      showCatalog()
+    }
+  }
+}
+
+// ── Catalog view refresh helper ──────────────────────────────────────────────
+function refreshCatalogView() {
+  invalidateCaches()
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+}
+
 const PILL      = { w: 400, h: 84  }
 const CARD      = { w: 460, h: 580 }
 const CATALOG   = { w: 460, h: 660 }
@@ -95,6 +139,7 @@ async function loadCards() {
 
 // Sync wrappers that persist to db in background (fire-and-forget)
 function persistCardState(cardId) {
+  invalidateCaches()
   db.upsertCardState(cardId, cardState[cardId]).catch(e => console.error('[db] persist card state failed:', e))
 }
 
@@ -116,6 +161,7 @@ async function saveCardEdit(card, newFront, newBack) {
     c.back = newBack
     if (!isQA) { c.when = ''; c.how = newBack; c.example = '' }
   }
+  invalidateCaches()
   return true
 }
 
@@ -124,6 +170,7 @@ async function saveQaTagsForRow(cardId, tagsStr) {
   await db.updateCardTags(cardId, tags)
   const c = cards.find(x => x.id === cardId)
   if (c) c.tags = tags
+  invalidateCaches()
   return true
 }
 
@@ -132,10 +179,11 @@ async function deleteCardById(cardId) {
   if (!card) return false
   await db.deleteCard(cardId)
   delete cardState[cardId]
-  db.deleteCardState(cardId).catch(() => {})
+  db.deleteCardState(cardId).catch(err => console.error('[db] delete card state failed:', err))
   cards = cards.filter(c => c.id !== cardId)
   if (currentCard?.id === cardId) currentCard = null
   sessionQueue = sessionQueue.filter(c => c.id !== cardId)
+  invalidateCaches()
   return true
 }
 
@@ -199,6 +247,7 @@ function recordAnswer(cardId, correct) {
 }
 
 function getStats() {
+  if (!statsDirty && statsCache) return statsCache
   const now   = Date.now()
   const total = cards.length
   const seen  = Object.keys(cardState).length
@@ -207,7 +256,9 @@ function getStats() {
   const streak = Object.values(cardState).reduce((max, s) => Math.max(max, s.streak || 0), 0)
   const totalGot  = Object.values(cardState).reduce((n, s) => n + (s.gotCount  || 0), 0)
   const totalMiss = Object.values(cardState).reduce((n, s) => n + (s.missCount || 0), 0)
-  return { total, seen, due, streak, totalGot, totalMiss }
+  statsCache = { total, seen, due, streak, totalGot, totalMiss }
+  statsDirty = false
+  return statsCache
 }
 
 // ── Activity tracking ─────────────────────────────────────────────────────────
@@ -217,9 +268,12 @@ function trackActivity() {
 
 // ── Gap card generation ──────────────────────────────────────────────────────
 let pendingGapCards = [] // queue of { id, front, back, tags, sourceCardFront, sessionId }
+const MAX_PENDING_GAP_CARDS = 5
 
 async function generateGapCards(cardIds) {
   try {
+    if (pendingGapCards.length >= MAX_PENDING_GAP_CARDS) return
+
     const lowSessions = await db.getLowScoreSessions(cardIds)
     if (!lowSessions.length) return
 
@@ -235,6 +289,7 @@ async function generateGapCards(cardIds) {
     }
 
     for (const session of lowSessions) {
+      if (pendingGapCards.length >= MAX_PENDING_GAP_CARDS) break
       const convo = session.messages.map(m => `${m.role}: ${m.content}`).join('\n')
       const prompt = `A student was quizzed on a flashcard and scored ${session.score}/2 (${session.score === 0 ? 'incorrect' : 'partial'}).
 
@@ -298,8 +353,9 @@ ipcMain.handle('gap-card:approve', async (_, { id }) => {
 
   await db.insertCard({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
   cardState[suggestion.id] = { interval: 1, streak: 0, gotCount: 0, missCount: 0, nextReview: Date.now() }
-  persistCardState(suggestion.id)
   cards.push({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  invalidateCaches()
+  persistCardState(suggestion.id)
   await db.markGapCardGenerated([suggestion.sessionId])
   await db.appendGapFeedback({
     cardFront: suggestion.front, cardBack: suggestion.back,
@@ -399,8 +455,9 @@ async function getAnalytics() {
 }
 
 function getCatalog() {
+  if (!catalogDirty && catalogCache) return catalogCache
   const now = Date.now()
-  return cards.map(card => {
+  catalogCache = cards.map(card => {
     const s = cardState[card.id]
     const got  = s?.gotCount  || 0
     const miss = s?.missCount || 0
@@ -422,6 +479,8 @@ function getCatalog() {
       flagged: !!s?.flagged,
     }
   })
+  catalogDirty = false
+  return catalogCache
 }
 
 // ── View state — set by main, pulled by renderer ─────────────────────────────
@@ -588,14 +647,14 @@ function showKnowledge() {
   setView('knowledge', {})
 }
 
-function showAnalytics() {
+async function showAnalytics() {
   if (!windowAlive()) { ensureWindow() }
   win.setAlwaysOnTop(false)
   resizeTo(ANALYTICS)
   app.dock?.show()
   win.show()
   win.focus()
-  setView('analytics', { analytics: getAnalytics() })
+  setView('analytics', { analytics: await getAnalytics() })
 }
 
 function showChat(card) {
@@ -649,6 +708,7 @@ function scheduleNext(overrideMinutes) {
 async function fireNotification() {
   // cardState is in-memory — no reload needed (db is write-through)
   cards     = await loadCards()
+  invalidateCaches()
   if (!cards.length) { scheduleNext(); return }
 
   sessionQueue = buildSessionQueue()
@@ -922,10 +982,7 @@ ipcMain.handle('cards:semantic-search', async (_, { query }) => {
     const scores = []
     for (const [cardId, emb] of Object.entries(embData.embeddings)) {
       const v = new Float32Array(emb)
-      let norm = 0
-      for (let d = 0; d < v.length; d++) norm += v[d] * v[d]
-      norm = Math.sqrt(norm)
-      if (norm > 0) for (let d = 0; d < v.length; d++) v[d] /= norm
+      normalizeVector(v)
       scores.push({ cardId, score: cosineSim(qv, v) })
     }
     scores.sort((a, b) => b.score - a.score)
@@ -1059,13 +1116,8 @@ async function openaiEmbeddings(texts, key) {
     for (const row of sorted) {
       const e = row.embedding
       const v = new Float32Array(e.length)
-      let s = 0
-      for (let d = 0; d < e.length; d++) {
-        v[d] = e[d]
-        s += e[d] * e[d]
-      }
-      s = Math.sqrt(s)
-      if (s > 0) for (let d = 0; d < e.length; d++) v[d] /= s
+      for (let d = 0; d < e.length; d++) v[d] = e[d]
+      normalizeVector(v)
       out.push(v)
     }
   }
@@ -1116,10 +1168,7 @@ function kmeansCosine(points, k, maxIter = 40) {
     for (let c = 0; c < k; c++) {
       if (counts[c] === 0) continue
       for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c]
-      let norm = 0
-      for (let d = 0; d < dim; d++) norm += centroids[c][d] * centroids[c][d]
-      norm = Math.sqrt(norm)
-      if (norm > 0) for (let d = 0; d < dim; d++) centroids[c][d] /= norm
+      normalizeVector(centroids[c])
     }
   }
   return assignments
@@ -1171,10 +1220,7 @@ async function runAutoTagAll() {
   for (let c = 0; c < k; c++) {
     if (counts[c] === 0) continue
     for (let d = 0; d < dim; d++) centroids[c][d] /= counts[c]
-    let norm = 0
-    for (let d = 0; d < dim; d++) norm += centroids[c][d] * centroids[c][d]
-    norm = Math.sqrt(norm)
-    if (norm > 0) for (let d = 0; d < dim; d++) centroids[c][d] /= norm
+    normalizeVector(centroids[c])
   }
 
   // Check each card's fit to its cluster — weak fits go to misc
@@ -1205,9 +1251,7 @@ ipcMain.handle('auto-tag-cards', async () => {
   try {
     await runAutoTagAll()
     cards = await loadCards()
-    if (currentView.type === 'catalog') {
-      setView('catalog', { catalog: getCatalog(), stats: getStats() })
-    }
+    refreshCatalogView()
     return { ok: true }
   } catch (e) {
     return { ok: false, error: e.message || String(e) }
@@ -1233,19 +1277,8 @@ ipcMain.handle('delete-card', async (_, { cardId }) => {
 
   // Advance session instead of hiding
   sessionQueue = sessionQueue.filter(c => c.id !== cardId)
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  } else if (currentView.type === 'card') {
-    const nextIdx = sessionQueue.findIndex((c, i) => i >= sessionDone)
-    if (nextIdx >= 0) {
-      currentCard = sessionQueue[nextIdx]
-      expandCard(currentCard)
-    } else if (notificationSession) {
-      hideWindow()
-    } else {
-      showCatalog()
-    }
-  }
+  refreshCatalogView()
+  advanceSessionOrEnd()
   return { ok: true, undoToken }
 })
 
@@ -1262,9 +1295,7 @@ ipcMain.handle('undo-delete', async (_, { token }) => {
     persistCardState(stash.card.id)
   }
   cards = await loadCards()
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true }
 })
 
@@ -1278,20 +1309,8 @@ ipcMain.handle('flag-card', (_, { cardId }) => {
 
   // Advance session
   sessionQueue = sessionQueue.filter(c => c.id !== cardId)
-  if (currentView.type === 'card') {
-    const nextIdx = sessionQueue.findIndex((c, i) => i >= sessionDone)
-    if (nextIdx >= 0) {
-      currentCard = sessionQueue[nextIdx]
-      expandCard(currentCard)
-    } else if (notificationSession) {
-      hideWindow()
-    } else {
-      showCatalog()
-    }
-  }
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
+  advanceSessionOrEnd()
   return { ok: true }
 })
 
@@ -1300,9 +1319,7 @@ ipcMain.handle('unflag-card', (_, { cardId }) => {
   delete cardState[cardId].flagged
   cardState[cardId].streak = 0
   persistCardState(cardId)
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true }
 })
 
@@ -1311,9 +1328,7 @@ ipcMain.handle('unretire-card', (_, { cardId }) => {
   delete cardState[cardId].retired
   cardState[cardId].streak = 0
   persistCardState(cardId)
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true }
 })
 
@@ -1324,9 +1339,7 @@ ipcMain.handle('bulk-delete', async (_, { cardIds }) => {
     if (await deleteCardById(id)) deleted++
   }
   cards = await loadCards()
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true, deleted }
 })
 
@@ -1337,9 +1350,7 @@ ipcMain.handle('bulk-set-tags', async (_, { cardIds, tags }) => {
     if (await saveQaTagsForRow(id, tagsStr)) updated++
   }
   cards = await loadCards()
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true, updated }
 })
 
@@ -1350,9 +1361,7 @@ ipcMain.handle('bulk-flag', (_, { cardIds }) => {
     cardState[id] = s
     persistCardState(id)
   }
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true }
 })
 
@@ -1399,9 +1408,7 @@ Output ONLY a JSON code block:
   await db.insertCard({ id: mergedId, type: 'qa', front: parsed.front.trim(), back: parsed.back.trim(), tags: tagsArr })
 
   cards = await loadCards()
-  if (currentView.type === 'catalog') {
-    setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  }
+  refreshCatalogView()
   return { ok: true, newCardId: mergedId }
 })
 
@@ -1410,6 +1417,7 @@ ipcMain.handle('apply-card-edit', async (_, { cardId, front, back }) => {
   if (!card) return { ok: false }
   await saveCardEdit(card, front, back)
   cards = await loadCards()
+  invalidateCaches()
   const c = cards.find(x => x.id === cardId)
   if (c && currentView.type === 'card') {
     currentCard = c
@@ -1493,8 +1501,11 @@ app.whenReady().then(async () => {
   // ChromaDB + Postgres managed by docker-compose (scripts/dev)
 
   app.on('activate', async () => {
-    // cardState is in-memory — no reload needed (db is write-through)
-    cards     = await loadCards()
+    // In-memory state is authoritative (write-through) — skip DB reload if cards are already loaded
+    if (!cards.length) {
+      cards = await loadCards()
+    }
+    invalidateCaches()
     if (!windowAlive()) {
       ensureWindow()
       return
@@ -1517,5 +1528,5 @@ app.on('window-all-closed', e => e.preventDefault())
 
 app.on('before-quit', () => {
   // Docker services cleaned up by scripts/dev trap
-  db.close().catch(() => {})
+  db.close().catch(err => console.error('[db] close failed:', err))
 })

@@ -6,167 +6,35 @@ Exposes four tools:
   - log_knowledge        : format, deduplicate, and persist a new problem log
   - search_knowledge     : semantic search over all indexed logs
   - generate_study_cards : convert unprocessed logs into flashcards
-  - review_pr            : extract engineering knowledge from a PR diff → log + study cards
+  - review_pr            : extract engineering knowledge from a PR diff -> log + study cards
 
 Deduplication:
   1. Embed incoming notes with OpenAI text-embedding-3-small
   2. Query Postgres (pgvector) for nearest neighbor
-  3. If similarity >= DEDUP_THRESHOLD → Claude merges into existing log
-  4. Otherwise → Claude formats fresh log, writes to Postgres with embedding
+  3. If similarity >= DEDUP_THRESHOLD -> Claude merges into existing log
+  4. Otherwise -> Claude formats fresh log, writes to Postgres with embedding
 """
 
 import json
-import os
-import re
 import subprocess
-import uuid
-from datetime import datetime
 from pathlib import Path
 
-from anthropic import Anthropic
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
-from openai import OpenAI
 
-import db as pgdb
+from knowledge_scribe.ai import anthropic_client
+from knowledge_scribe.config import CLAUDE_MODEL, DEDUP_THRESHOLD
+from knowledge_scribe.core import embed
+from knowledge_scribe.db import get_db
+from knowledge_scribe.services.cards import process_unprocessed_logs
+from knowledge_scribe.services.knowledge import log_knowledge as _log_knowledge
+from knowledge_scribe.services.knowledge import search_knowledge as _search_knowledge
 
-# ── Bootstrap ─────────────────────────────────────────────────────────────────
-
-load_dotenv(Path(__file__).parent / ".env")
-
-DEDUP_THRESHOLD  = float(os.environ.get("DEDUP_THRESHOLD", "0.88"))
-EMBED_MODEL      = "text-embedding-3-small"
-CLAUDE_MODEL     = "claude-sonnet-4-6"
-
-anthropic_client = Anthropic()
-openai_client    = OpenAI()
+# ── MCP setup ────────────────────────────────────────────────────────────────
 
 mcp = FastMCP("knowledge-scribe")
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def embed(text: str) -> list[float]:
-    resp = openai_client.embeddings.create(
-        model=EMBED_MODEL,
-        input=text[:8000],
-    )
-    return resp.data[0].embedding
-
-
-def slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9-]", "", re.sub(r"\s+", "-", text.lower().strip()))[:50]
-
-
-FORMAT_PROMPT = """\
-You are formatting raw developer notes into a structured knowledge log.
-
-Ticket: {ticket_id}
-Date: {date}
-
-Raw notes:
-{raw_notes}
-
-Output ONLY valid markdown using this exact template. Be concise. \
-Every section must be filled — use "N/A" if genuinely not applicable.
-
----
-date: {date}
-type: coding
-problem: <one-line problem description>
-tags: [{tags}]
----
-
-## Problem
-<what was asked or what broke; relevant context>
-
-## Initial Observations
-<what was noticed first; what was ambiguous>
-
-## Approach
-<numbered step-by-step reasoning; what hypotheses were formed and checked>
-
-1.
-2.
-3.
-
-## Key Insights
-<the non-obvious things; mental models or heuristics that applied>
-
--
-
-## Solution
-<the final answer, fix, or output>
-
-## Pitfalls / What to Watch For
-<what would have led someone astray; wrong early assumptions>
-
--
-
-## Study Prompts
-Q: <key diagnostic or reasoning question>
-A: <answer>
----"""
-
-
-MERGE_PROMPT = """\
-Two knowledge logs cover overlapping material. Merge them into one comprehensive log that:
-- Deduplicates repeated information (keep the clearest version)
-- Preserves unique insights from both
-- Maintains the same markdown template structure
-
-EXISTING LOG:
-{existing}
-
-NEW NOTES:
-{new_notes}
-
-Output ONLY the merged markdown — no preamble, no explanation.\
-"""
-
-
-def format_with_claude(ticket_id: str, raw_notes: str, tags: list[str]) -> str:
-    tag_str = ", ".join(f'"{t}"' for t in tags) if tags else ""
-    prompt  = FORMAT_PROMPT.format(
-        ticket_id=ticket_id,
-        date=datetime.now().strftime("%Y-%m-%d"),
-        raw_notes=raw_notes,
-        tags=tag_str,
-    )
-    msg = anthropic_client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text.strip()
-
-
-def merge_with_claude(existing: str, new_notes: str) -> str:
-    prompt = MERGE_PROMPT.format(existing=existing, new_notes=new_notes)
-    msg = anthropic_client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return msg.content[0].text.strip()
-
-
-def extract_problem_line(markdown: str) -> str:
-    for line in markdown.splitlines():
-        if line.startswith("problem:"):
-            return line.split(":", 1)[1].strip().strip('"\'')
-    return "untitled"
-
-
-def _parse_tags(fm: dict) -> list[str]:
-    try:
-        parsed = json.loads(fm.get("tags", "[]"))
-        return parsed if isinstance(parsed, list) else []
-    except (json.JSONDecodeError, TypeError):
-        return []
-
-
-# ── Tools ─────────────────────────────────────────────────────────────────────
+# ── Tools ────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
 def log_knowledge(
@@ -184,64 +52,7 @@ def log_knowledge(
         raw_notes: Verbose raw notes — what you did, why, what broke, what worked
         tags:      Optional list of topic tags
     """
-    tags = tags or []
-    embed_input = f"{ticket_id}\n{raw_notes}"
-    vec = embed(embed_input)
-
-    # Check for near-duplicate via pgvector
-    nearest = pgdb.nearest_logs(vec, n=1)
-
-    if nearest:
-        similarity = nearest[0]["similarity"]
-
-        if similarity >= DEDUP_THRESHOLD:
-            existing_row = nearest[0]
-            existing_filename = existing_row["filename"]
-            existing_content = existing_row["content"]
-            merged = merge_with_claude(existing_content, raw_notes)
-
-            # Re-embed merged content
-            merged_vec = embed(merged[:8000])
-
-            # Update in Postgres
-            fm = pgdb.parse_frontmatter(merged)
-            pgdb.upsert_log(
-                filename=existing_filename,
-                date=fm.get("date"),
-                log_type=fm.get("type", "coding"),
-                problem=fm.get("problem", existing_filename),
-                tags=_parse_tags(fm),
-                content=merged,
-                embedding=merged_vec,
-            )
-
-            return (
-                f"Merged into existing log: {existing_filename}\n"
-                f"Similarity: {similarity:.0%}"
-            )
-
-    # Format fresh log
-    formatted    = format_with_claude(ticket_id, raw_notes, tags)
-    problem_line = extract_problem_line(formatted)
-    date_str     = datetime.now().strftime("%Y-%m-%d")
-    filename     = f"{date_str}-{ticket_id.lower()}-{slugify(problem_line)}.md"
-
-    # Parse frontmatter for structured storage
-    fm = pgdb.parse_frontmatter(formatted)
-
-    # Write to Postgres with embedding
-    pgdb.upsert_log(
-        filename=filename,
-        date=date_str,
-        log_type=fm.get("type", "coding"),
-        problem=fm.get("problem", problem_line),
-        tags=tags,
-        content=formatted,
-        embedding=vec,
-    )
-
-    preview = "\n".join(formatted.splitlines()[:20])
-    return f"Logged: {filename}\n\n{preview}\n..."
+    return _log_knowledge(ticket_id, raw_notes, tags)
 
 
 @mcp.tool()
@@ -254,25 +65,7 @@ def search_knowledge(query: str, n_results: int = 3) -> str:
         query:     Natural language query
         n_results: Number of results to return (default 3)
     """
-    vec     = embed(query)
-    results = pgdb.nearest_logs(vec, n=n_results)
-
-    if not results:
-        return "No matching knowledge found."
-
-    parts = []
-    for row in results:
-        similarity = row["similarity"]
-        filename   = row["filename"]
-        excerpt    = _extract_sections(row["content"], ["Key Insights", "Solution", "Pitfalls"])
-
-        parts.append(
-            f"### {filename}  (similarity {similarity:.0%})\n"
-            f"date: {row.get('date', '?')}\n\n"
-            f"{excerpt}"
-        )
-
-    return "\n\n---\n\n".join(parts)
+    return _search_knowledge(query, n_results)
 
 
 @mcp.tool()
@@ -281,30 +74,10 @@ def generate_study_cards() -> str:
     Convert unprocessed problem logs into Q&A and concept flashcards.
     Reads from Postgres, writes new cards to Postgres.
     """
-    from generate_cards import process_unprocessed_logs
     return process_unprocessed_logs()
 
 
-# ── Util ──────────────────────────────────────────────────────────────────────
-
-def _extract_sections(markdown: str, section_names: list[str]) -> str:
-    """Pull named ## sections from a markdown log."""
-    lines   = markdown.splitlines()
-    capture = False
-    out     = []
-
-    for line in lines:
-        if line.startswith("## "):
-            heading = line[3:].strip()
-            capture = any(heading.startswith(s) for s in section_names)
-        elif capture:
-            out.append(line)
-
-    text = "\n".join(out).strip()
-    return text[:800] if text else markdown[:800]
-
-
-# ── review_pr ─────────────────────────────────────────────────────────────────
+# ── review_pr ────────────────────────────────────────────────────────────────
 
 REVIEW_PR_PROMPT = """\
 You are reviewing a pull request diff to extract engineering knowledge worth studying.
@@ -359,6 +132,7 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
         repo_path: Path to the git repo (defaults to current working directory)
     """
     cwd = repo_path or str(Path.cwd())
+    db = get_db()
 
     meta_result = subprocess.run(
         ["gh", "pr", "view", str(pr_number), "--json", "title,body"],
@@ -415,24 +189,24 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
 
         # Check for near-duplicate via pgvector
         vec = embed(f"{ticket_id}\n{raw_notes}")
-        nearest = pgdb.nearest_logs(vec, n=1)
+        nearest = db.nearest_logs(vec, n=1)
         if nearest and nearest[0]["similarity"] >= DEDUP_THRESHOLD:
             results.append(f"  skipped '{slug}' (already covered at {nearest[0]['similarity']:.0%} similarity)")
             continue
 
-        outcome = log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=item_tags)
+        outcome = _log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=item_tags)
         results.append(f"  logged '{slug}': {outcome.splitlines()[0]}")
         logged_count += 1
 
     if logged_count > 0:
-        card_outcome = generate_study_cards()
+        card_outcome = process_unprocessed_logs()
         results.append(f"\nStudy cards: {card_outcome.splitlines()[0]}")
 
     summary = f"PR #{pr_number} — {logged_count}/{len(items)} items logged\n" + "\n".join(results)
     return summary
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     mcp.run()

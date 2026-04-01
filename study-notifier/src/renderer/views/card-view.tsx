@@ -44,6 +44,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
   const [popoverIdx, setPopoverIdx] = useState(0)
   const [catalog, setCatalog] = useState<CatalogItem[]>([])
+  const catalogLoaded = useRef(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
   // Reset on card change
@@ -56,18 +57,27 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     setThread([]); setPastSessions([]); setViewingSession(null); setConversationsOpen(false)
   }
 
-  // Load existing sessions and catalog on card change — start with clean thread
+  // Load catalog once per mount (not per card change) — catalog is only needed for @mentions
   useEffect(() => {
-    window.api.getCatalog().then(setCatalog)
+    if (!catalogLoaded.current) {
+      window.api.getCatalog().then(c => {
+        setCatalog(c)
+        catalogLoaded.current = true
+      })
+    }
+  }, [])
+
+  // Load existing sessions on card change — start with clean thread
+  useEffect(() => {
     window.api.getSessions(card.id).then(sessions => {
       setPastSessions(sessions)
     })
   }, [card.id])
 
-  // Auto-scroll thread
+  // Auto-scroll thread (also when spinner appears)
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [thread.length])
+  }, [thread.length, evaluating])
 
   // Close menu on outside click
   useEffect(() => {
@@ -272,7 +282,11 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
           setLastScore(r.score)
           await window.api.recordAnswer(card.id, r.score >= 1)
         }
+      } else if (!r.ok) {
+        setThread(prev => [...prev, { role: 'assistant', content: `Error: ${r.error || 'Unknown error'}`, ts: Date.now() }])
       }
+    } catch (e: any) {
+      setThread(prev => [...prev, { role: 'assistant', content: `Error: ${e.message || e}`, ts: Date.now() }])
     } finally { setEvaluating(false) }
 
     // Focus back on input
