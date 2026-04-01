@@ -37,6 +37,7 @@ const api = {
   getKnowledgeLogs: ()         => ipcRenderer.invoke('knowledge:get-logs'),
   getKnowledgeLog:  (filename) => ipcRenderer.invoke('knowledge:get-log', { filename }),
   searchKnowledge:  (query)    => ipcRenderer.invoke('knowledge:search', { query }),
+  getRepos:         ()         => ipcRenderer.invoke('repos:get'),
   getChromaStatus:  ()         => ipcRenderer.invoke('knowledge:chroma-status'), // legacy name — actually checks Postgres
   getDbStatus:      ()         => ipcRenderer.invoke('knowledge:chroma-status'),
   getRelatedLogs:   (filename) => ipcRenderer.invoke('knowledge:related', { filename }),

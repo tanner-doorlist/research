@@ -128,6 +128,23 @@ async function initSchema() {
     EXCEPTION WHEN duplicate_column THEN NULL;
     END $$
   `)
+  // Add repo column to problem_logs and cards
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE problem_logs ADD COLUMN repo TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `)
+  await pool.query(`
+    DO $$ BEGIN
+      ALTER TABLE cards ADD COLUMN repo TEXT;
+    EXCEPTION WHEN duplicate_column THEN NULL;
+    END $$
+  `)
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_problem_logs_repo ON problem_logs(repo);
+    CREATE INDEX IF NOT EXISTS idx_cards_repo ON cards(repo);
+  `)
   // pgvector HNSW index for cosine similarity search
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_problem_logs_embedding ON problem_logs
@@ -373,6 +390,7 @@ async function getAllCards() {
     front: r.front,
     back: r.back,
     tags: r.tags || [],
+    repo: r.repo || null,
     ...(r.type === 'concept' ? {
       when: r.when_to_use,
       how: r.how_it_works,
@@ -383,10 +401,11 @@ async function getAllCards() {
 
 async function insertCard(card) {
   await pool.query(
-    `INSERT INTO cards (id, type, front, back, tags, when_to_use, how_it_works, example)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    `INSERT INTO cards (id, type, front, back, tags, when_to_use, how_it_works, example, repo)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
     [card.id, card.type || 'qa', card.front, card.back || '',
-     card.tags || [], card.when || '', card.how || '', card.example || '']
+     card.tags || [], card.when || '', card.how || '', card.example || '',
+     card.repo || null]
   )
 }
 
@@ -400,6 +419,7 @@ async function updateCard(cardId, fields) {
   if (fields.when !== undefined) { sets.push(`when_to_use = $${i++}`); vals.push(fields.when) }
   if (fields.how !== undefined) { sets.push(`how_it_works = $${i++}`); vals.push(fields.how) }
   if (fields.example !== undefined) { sets.push(`example = $${i++}`); vals.push(fields.example) }
+  if (fields.repo !== undefined) { sets.push(`repo = $${i++}`); vals.push(fields.repo) }
   if (!sets.length) return
   await pool.query(`UPDATE cards SET ${sets.join(', ')} WHERE id = $1`, vals)
 }
@@ -416,7 +436,7 @@ async function updateCardTags(cardId, tags) {
 // ── Problem Logs CRUD ───────────────────────────────────────────────────────
 async function getAllProblemLogs() {
   const { rows } = await pool.query(
-    `SELECT id, filename, date, type, problem, tags
+    `SELECT id, filename, date, type, problem, tags, repo
      FROM problem_logs
      WHERE merged_into IS NULL
      ORDER BY date DESC NULLS LAST, filename DESC`
@@ -427,6 +447,7 @@ async function getAllProblemLogs() {
     date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : (r.date || ''),
     problem: r.problem,
     tags: r.tags ? JSON.stringify(r.tags) : '[]',
+    repo: r.repo || null,
   }))
 }
 
@@ -457,7 +478,7 @@ async function markLogMerged(filename, mergedIntoId) {
 
 async function getUnprocessedLogs() {
   const { rows } = await pool.query(
-    `SELECT id, filename, content FROM problem_logs
+    `SELECT id, filename, content, repo FROM problem_logs
      WHERE merged_into IS NULL AND cards_generated = false
      ORDER BY date ASC`
   )
@@ -738,6 +759,17 @@ async function getRecentDenials(limit = 5) {
   return rows
 }
 
+// ── Repos ────────────────────────────────────────────────────────────────────
+async function getDistinctRepos() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT repo FROM problem_logs WHERE repo IS NOT NULL AND merged_into IS NULL
+     UNION
+     SELECT DISTINCT repo FROM cards WHERE repo IS NOT NULL
+     ORDER BY repo`
+  )
+  return rows.map(r => r.repo)
+}
+
 // ── Cleanup ──────────────────────────────────────────────────────────────────
 async function close() {
   await pool.end()
@@ -755,4 +787,5 @@ module.exports = {
   getAllProblemLogs, getProblemLog, upsertProblemLog, markLogMerged,
   getUnprocessedLogs, markLogProcessed,
   appendGapFeedback, getRecentDenials,
+  getDistinctRepos,
 }

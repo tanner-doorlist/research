@@ -15,7 +15,8 @@ class KnowledgeDB(ABC):
     @abstractmethod
     def upsert_log(self, filename: str, date: str | None, log_type: str,
                    problem: str, tags: list[str], content: str,
-                   embedding: list[float] | None = None) -> None:
+                   embedding: list[float] | None = None,
+                   repo: str | None = None) -> None:
         ...
 
     @abstractmethod
@@ -37,7 +38,8 @@ class KnowledgeDB(ABC):
     @abstractmethod
     def insert_card(self, card_id: str, card_type: str, front: str, back: str,
                     tags: list[str], when_to_use: str = "",
-                    how_it_works: str = "", example: str = "") -> None:
+                    how_it_works: str = "", example: str = "",
+                    repo: str | None = None) -> None:
         ...
 
     @abstractmethod

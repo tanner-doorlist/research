@@ -32,6 +32,7 @@ def main():
     p_log.add_argument("--ticket", required=True, help="Ticket ID, e.g. DLE-123")
     p_log.add_argument("--notes", required=True, help="Raw notes (verbose)")
     p_log.add_argument("--tags", default="", help="Comma-separated tags")
+    p_log.add_argument("--repo", default=None, help="Repo name or URL (optional)")
 
     # search
     p_search = sub.add_parser("search", help="Semantic search over logs")
@@ -46,7 +47,7 @@ def main():
     try:
         if args.cmd == "log":
             tags = [t.strip() for t in args.tags.split(",") if t.strip()]
-            result = log_knowledge(args.ticket, args.notes, tags)
+            result = log_knowledge(args.ticket, args.notes, tags, repo=args.repo)
         elif args.cmd == "search":
             result = search_knowledge(args.query, args.n)
         elif args.cmd == "generate":

@@ -41,6 +41,7 @@ def log_knowledge(
     ticket_id: str,
     raw_notes: str,
     tags: list[str] | None = None,
+    repo: str | None = None,
 ) -> str:
     """
     Log knowledge gained from working on a ticket.
@@ -51,8 +52,10 @@ def log_knowledge(
         ticket_id: Linear ticket ID, e.g. DLE-123
         raw_notes: Verbose raw notes — what you did, why, what broke, what worked
         tags:      Optional list of topic tags
+        repo:      Optional repo name or URL (e.g. "doorlite-next" or GitHub URL).
+                   Used to scope knowledge per-repo in the study app.
     """
-    return _log_knowledge(ticket_id, raw_notes, tags)
+    return _log_knowledge(ticket_id, raw_notes, tags, repo=repo)
 
 
 @mcp.tool()
@@ -134,6 +137,19 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
     cwd = repo_path or str(Path.cwd())
     db = get_db()
 
+    # Auto-detect repo name from git remote
+    repo_name = None
+    try:
+        remote_result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True, text=True, cwd=cwd,
+        )
+        if remote_result.returncode == 0:
+            from knowledge_scribe.services.knowledge import _normalize_repo
+            repo_name = _normalize_repo(remote_result.stdout.strip())
+    except Exception:
+        pass
+
     meta_result = subprocess.run(
         ["gh", "pr", "view", str(pr_number), "--json", "title,body"],
         capture_output=True, text=True, cwd=cwd,
@@ -194,7 +210,7 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
             results.append(f"  skipped '{slug}' (already covered at {nearest[0]['similarity']:.0%} similarity)")
             continue
 
-        outcome = _log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=item_tags)
+        outcome = _log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=item_tags, repo=repo_name)
         results.append(f"  logged '{slug}': {outcome.splitlines()[0]}")
         logged_count += 1
 

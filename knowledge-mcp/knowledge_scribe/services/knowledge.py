@@ -17,13 +17,34 @@ from ..core import (
 from ..db import get_db, parse_frontmatter
 
 
-def log_knowledge(ticket_id: str, raw_notes: str, tags: list[str] | None = None) -> str:
+def _normalize_repo(repo: str | None) -> str | None:
+    """Normalize a repo URL or name to a short repo name."""
+    if not repo:
+        return None
+    repo = repo.strip().rstrip("/")
+    # Strip common URL prefixes
+    for prefix in ("https://github.com/", "http://github.com/", "git@github.com:"):
+        if repo.startswith(prefix):
+            repo = repo[len(prefix):]
+            break
+    # Strip .git suffix
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    # If org/repo format, take just the repo name
+    if "/" in repo:
+        repo = repo.rsplit("/", 1)[-1]
+    return repo.lower() or None
+
+
+def log_knowledge(ticket_id: str, raw_notes: str, tags: list[str] | None = None,
+                  repo: str | None = None) -> str:
     """
     Format, deduplicate, and persist a knowledge log.
 
     Returns a summary string.
     """
     tags = tags or []
+    repo = _normalize_repo(repo)
     db = get_db()
 
     embed_input = f"{ticket_id}\n{raw_notes}"
@@ -54,6 +75,7 @@ def log_knowledge(ticket_id: str, raw_notes: str, tags: list[str] | None = None)
                 tags=parse_tags(fm),
                 content=merged,
                 embedding=merged_vec,
+                repo=repo,
             )
 
             return (
@@ -79,6 +101,7 @@ def log_knowledge(ticket_id: str, raw_notes: str, tags: list[str] | None = None)
         tags=tags,
         content=formatted,
         embedding=vec,
+        repo=repo,
     )
 
     preview = "\n".join(formatted.splitlines()[:20])

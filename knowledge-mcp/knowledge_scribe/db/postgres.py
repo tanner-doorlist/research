@@ -66,28 +66,31 @@ class PostgresDB(KnowledgeDB):
 
     def upsert_log(self, filename: str, date: str | None, log_type: str,
                    problem: str, tags: list[str], content: str,
-                   embedding: list[float] | None = None) -> None:
+                   embedding: list[float] | None = None,
+                   repo: str | None = None) -> None:
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 if embedding is not None:
                     vec_str = _vec_to_str(embedding)
                     cur.execute(
-                        """INSERT INTO problem_logs (filename, date, type, problem, tags, content, embedding)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s::vector)
+                        """INSERT INTO problem_logs (filename, date, type, problem, tags, content, embedding, repo)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s::vector, %s)
                            ON CONFLICT (filename) DO UPDATE SET
                              date = EXCLUDED.date, type = EXCLUDED.type, problem = EXCLUDED.problem,
-                             tags = EXCLUDED.tags, content = EXCLUDED.content, embedding = EXCLUDED.embedding""",
-                        (filename, date, log_type, problem, tags, content, vec_str),
+                             tags = EXCLUDED.tags, content = EXCLUDED.content, embedding = EXCLUDED.embedding,
+                             repo = COALESCE(EXCLUDED.repo, problem_logs.repo)""",
+                        (filename, date, log_type, problem, tags, content, vec_str, repo),
                     )
                 else:
                     cur.execute(
-                        """INSERT INTO problem_logs (filename, date, type, problem, tags, content)
-                           VALUES (%s, %s, %s, %s, %s, %s)
+                        """INSERT INTO problem_logs (filename, date, type, problem, tags, content, repo)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s)
                            ON CONFLICT (filename) DO UPDATE SET
                              date = EXCLUDED.date, type = EXCLUDED.type, problem = EXCLUDED.problem,
-                             tags = EXCLUDED.tags, content = EXCLUDED.content""",
-                        (filename, date, log_type, problem, tags, content),
+                             tags = EXCLUDED.tags, content = EXCLUDED.content,
+                             repo = COALESCE(EXCLUDED.repo, problem_logs.repo)""",
+                        (filename, date, log_type, problem, tags, content, repo),
                     )
             conn.commit()
         except Exception:
@@ -142,7 +145,7 @@ class PostgresDB(KnowledgeDB):
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(
-                    """SELECT id, filename, content FROM problem_logs
+                    """SELECT id, filename, content, repo FROM problem_logs
                        WHERE merged_into IS NULL AND cards_generated = false
                        ORDER BY date ASC"""
                 )
@@ -171,15 +174,16 @@ class PostgresDB(KnowledgeDB):
 
     def insert_card(self, card_id: str, card_type: str, front: str, back: str,
                     tags: list[str], when_to_use: str = "",
-                    how_it_works: str = "", example: str = "") -> None:
+                    how_it_works: str = "", example: str = "",
+                    repo: str | None = None) -> None:
         conn = self._get_conn()
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    """INSERT INTO cards (id, type, front, back, tags, when_to_use, how_it_works, example)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """INSERT INTO cards (id, type, front, back, tags, when_to_use, how_it_works, example, repo)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                        ON CONFLICT DO NOTHING""",
-                    (card_id, card_type, front, back, tags, when_to_use, how_it_works, example),
+                    (card_id, card_type, front, back, tags, when_to_use, how_it_works, example, repo),
                 )
             conn.commit()
         except Exception:
