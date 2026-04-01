@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PROJECT="${TF_VAR_project:-doorlistdev}"
+REGION="${TF_VAR_region:-us-central1}"
+REGISTRY="${REGION}-docker.pkg.dev/${PROJECT}/services"
+IMAGE_TAG="$(git -C "$REPO_ROOT" rev-parse --short HEAD)"
+SERVICE="knowledge-scribe"
+
+echo "==> Building ${SERVICE}:${IMAGE_TAG}"
+docker build \
+  --platform linux/amd64 \
+  -t "${REGISTRY}/${SERVICE}:${IMAGE_TAG}" \
+  -t "${REGISTRY}/${SERVICE}:latest" \
+  "${REPO_ROOT}/remote-mcp-server"
+
+echo "==> Pushing to Artifact Registry"
+docker push "${REGISTRY}/${SERVICE}:${IMAGE_TAG}"
+docker push "${REGISTRY}/${SERVICE}:latest"
+
+echo "==> Applying Terraform"
+cd "${REPO_ROOT}/infra"
+terraform init -backend-config="bucket=${PROJECT}-terraform-state"
+terraform apply \
+  -var="image_tag=${IMAGE_TAG}" \
+  -auto-approve
+
+URL=$(terraform output -raw service_url)
+echo ""
+echo "==> Deployed: ${URL}"
+echo "    MCP URL:  ${URL}/mcp"

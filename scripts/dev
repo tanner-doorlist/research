@@ -1,78 +1,85 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start the research dev environment.
-# Launches Postgres via Docker Compose, then the Electron app with hot reload.
+# Start the dev environment.
+# By default, launches just the Electron app (pointing at the production server or KNOWLEDGE_SCRIBE_URL).
+# With --local-server, also starts the remote-mcp-server + Postgres for full-stack local dev.
 #
 # Usage:
-#   ./scripts/dev                              # uses repo dir as RESEARCH_DIR
-#   RESEARCH_DIR=~/research ./scripts/dev      # uses ~/research for data
+#   ./scripts/dev                          # Electron only (uses remote server)
+#   ./scripts/dev --local-server           # Electron + local server + Postgres
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export RESEARCH_DIR="${RESEARCH_DIR:-$REPO_DIR}"
+LOCAL_SERVER=false
 
-echo "==> Research dev environment"
-echo "    Repo:         $REPO_DIR"
-echo "    Data dir:     $RESEARCH_DIR"
-echo ""
+for arg in "$@"; do
+  case "$arg" in
+    --local-server) LOCAL_SERVER=true ;;
+  esac
+done
 
-# ── Preflight checks ─────────────────────────────────────────────────────────
+# ── Preflight ────────────────────────────────────────────────────────────────
 if [ ! -d "$REPO_DIR/study-notifier/node_modules" ]; then
   echo "    node_modules missing — running setup first"
   "$REPO_DIR/scripts/setup"
   echo ""
 fi
 
-if ! command -v docker &> /dev/null; then
-  echo "ERROR: Docker is required. Install Docker Desktop."
-  exit 1
-fi
+# ── Local server mode ────────────────────────────────────────────────────────
+if [ "$LOCAL_SERVER" = true ]; then
+  if ! command -v docker &> /dev/null; then
+    echo "ERROR: Docker is required for --local-server mode."
+    exit 1
+  fi
 
-# ── Docker Compose services ──────────────────────────────────────────────────
-cd "$REPO_DIR"
-
-# Stop old knowledge-mcp compose if it's holding ports
-if [ -f "$REPO_DIR/knowledge-mcp/docker-compose.yml" ]; then
-  cd "$REPO_DIR/knowledge-mcp"
-  docker compose down 2>/dev/null || true
+  echo "==> Starting Postgres"
   cd "$REPO_DIR"
-fi
 
-# Stop any container holding port 5432 (e.g. another worktree's Postgres)
-BLOCKING_CONTAINER=$(docker ps --filter "publish=5432" --format "{{.Names}}" 2>/dev/null | head -1)
-if [ -n "$BLOCKING_CONTAINER" ]; then
-  echo "    Stopping $BLOCKING_CONTAINER (holding port 5432)"
-  docker stop "$BLOCKING_CONTAINER" 2>/dev/null || true
-fi
-
-echo "==> Starting Postgres"
-docker compose up -d
-
-# Wait for Postgres
-echo "    Waiting for Postgres..."
-for i in $(seq 1 20); do
-  if docker compose exec -T postgres pg_isready -U postgres -q 2>/dev/null; then
-    echo "    Postgres ready"
-    break
+  # Stop any container holding port 5432
+  BLOCKING=$(docker ps --filter "publish=5432" --format "{{.Names}}" 2>/dev/null | head -1)
+  if [ -n "$BLOCKING" ]; then
+    echo "    Stopping $BLOCKING (holding port 5432)"
+    docker stop "$BLOCKING" 2>/dev/null || true
   fi
-  if [ "$i" -eq 20 ]; then
-    echo "    Warning: Postgres didn't become ready"
-  fi
-  sleep 1
-done
 
-cleanup() {
+  docker compose up -d
+  echo "    Waiting for Postgres..."
+  for i in $(seq 1 20); do
+    if docker compose exec -T postgres pg_isready -U postgres -q 2>/dev/null; then
+      echo "    Postgres ready"
+      break
+    fi
+    [ "$i" -eq 20 ] && echo "    Warning: Postgres didn't become ready"
+    sleep 1
+  done
+
+  cleanup() {
+    echo ""
+    echo "==> Shutting down Docker services"
+    cd "$REPO_DIR" && docker compose stop
+  }
+  trap cleanup EXIT INT TERM
+
+  export KNOWLEDGE_SCRIBE_URL="http://localhost:3000"
+  export KNOWLEDGE_SCRIBE_TOKEN="${KNOWLEDGE_SCRIBE_TOKEN:-dev-token}"
+  export TEAM_TOKEN="${KNOWLEDGE_SCRIBE_TOKEN}"
+
+  echo "==> Full-stack local dev"
+  echo "    Server:  $KNOWLEDGE_SCRIBE_URL"
   echo ""
-  echo "==> Shutting down Docker services"
-  cd "$REPO_DIR"
-  docker compose stop
-}
-trap cleanup EXIT INT TERM
 
-# ── Electron app with hot reload ──────────────────────────────────────────────
-echo "==> Starting study-notifier (Electron + Vite)"
-echo ""
-cd "$REPO_DIR/study-notifier"
-exec npx concurrently -k \
-  "vite" \
-  "wait-on http://localhost:5173 && RESEARCH_DIR=$RESEARCH_DIR VITE_DEV_SERVER_URL=http://localhost:5173 electron ."
+  cd "$REPO_DIR/study-notifier"
+  exec npx concurrently -k -n server,vite,electron \
+    "cd $REPO_DIR/remote-mcp-server && TEAM_TOKEN=$TEAM_TOKEN npx tsx watch src/index.ts" \
+    "vite" \
+    "wait-on http://localhost:5173 http://localhost:3000/api/health && VITE_DEV_SERVER_URL=http://localhost:5173 electron ."
+else
+  echo "==> Study Notifier dev"
+  echo "    Server: ${KNOWLEDGE_SCRIBE_URL:-<set in app settings>}"
+  echo ""
+
+  cd "$REPO_DIR/study-notifier"
+  exec npx concurrently -k -n vite,electron \
+    "vite" \
+    "wait-on http://localhost:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron ."
+fi

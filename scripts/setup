@@ -6,22 +6,12 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/setup
-#   RESEARCH_DIR=/path/to/data ./scripts/setup
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export RESEARCH_DIR="${RESEARCH_DIR:-$REPO_DIR}"
 
 echo "==> Research repo setup"
-echo "    Repo:         $REPO_DIR"
-echo "    Data dir:     $RESEARCH_DIR"
+echo "    Repo: $REPO_DIR"
 echo ""
-
-# ── Docker ───────────────────────────────────────────────────────────────────
-if ! command -v docker &> /dev/null; then
-  echo "ERROR: Docker is required. Install Docker Desktop: https://www.docker.com/products/docker-desktop/"
-  exit 1
-fi
-echo "==> Docker found"
 
 # ── study-notifier (Electron + React) ─────────────────────────────────────────
 echo "==> Installing study-notifier npm dependencies"
@@ -29,39 +19,13 @@ cd "$REPO_DIR/study-notifier"
 npm install --prefer-offline --no-audit --no-fund 2>&1 | tail -1
 echo "    Done"
 
-# ── knowledge-mcp (Python) ───────────────────────────────────────────────────
-if [ -d "$REPO_DIR/knowledge-mcp" ]; then
-  echo "==> Setting up knowledge-mcp Python environment"
-  cd "$REPO_DIR/knowledge-mcp"
-
-  if [ ! -d .venv ]; then
-    python3 -m venv .venv
-    echo "    Created .venv"
-  fi
-
-  source .venv/bin/activate
-  echo "    Installing Python deps (this may take a minute)..."
-  pip install -r requirements.txt 2>&1 | grep -E "^(Installing|Successfully|Requirement)" | head -10
-  echo "    Python deps installed"
-
-  if [ ! -f .env ]; then
-    if [ -f .env.example ]; then
-      cp .env.example .env
-      echo "    Created .env from .env.example — fill in API keys"
-    fi
-  else
-    echo "    .env already exists"
-  fi
+# ── remote-mcp-server ────────────────────────────────────────────────────────
+if [ -d "$REPO_DIR/remote-mcp-server" ]; then
+  echo "==> Installing remote-mcp-server npm dependencies"
+  cd "$REPO_DIR/remote-mcp-server"
+  npm install --prefer-offline --no-audit --no-fund 2>&1 | tail -1
+  echo "    Done"
 fi
-
-# ── Pull Docker images ───────────────────────────────────────────────────────
-echo "==> Pulling Docker images (pgvector/postgres)..."
-cd "$REPO_DIR"
-docker compose pull 2>&1 | tail -5
-
-# ── Data directories ─────────────────────────────────────────────────────────
-mkdir -p "$RESEARCH_DIR/study-cards"
-mkdir -p "$RESEARCH_DIR/problem-logs"
 
 echo ""
 echo "==> Setup complete"

@@ -3,9 +3,7 @@ const path    = require('path')
 const fs      = require('fs')
 const os      = require('os')
 const crypto  = require('crypto')
-const { spawn } = require('child_process')
 const Anthropic = require('@anthropic-ai/sdk')
-const db      = require('./db')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function isUuid(s) {
@@ -25,18 +23,7 @@ function normalizeVector(v) {
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const RESEARCH_DIR       = process.env.RESEARCH_DIR || path.join(os.homedir(), 'research')
-const KNOWLEDGE_MCP_DIR  = path.join(RESEARCH_DIR, 'knowledge-mcp')
-// Legacy file paths — used only for one-time migration to Postgres
-const CARDS_FILE         = path.join(RESEARCH_DIR, 'study-cards', 'qa_cards.tsv')
-const CONCEPT_FILE       = path.join(RESEARCH_DIR, 'study-cards', 'concept_cards.tsv')
-const STATE_FILE         = path.join(RESEARCH_DIR, 'study-cards', '.card_state.json')
-const SETTINGS_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.settings.json')
-const LOGS_DIR           = path.join(RESEARCH_DIR, 'problem-logs')
-const CARD_EMBEDDINGS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.card_embeddings.json')
-const EVAL_LOG_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.evaluation_log.json')
-const ACTIVITY_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.activity_log.json')
-const CONVERSATIONS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.card_conversations.json')
+// All data is now stored on the remote server — no local file paths needed
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULTS = {
@@ -58,7 +45,6 @@ let annoyTimer     = null
 let isExpanded     = false
 let sessionDone         = 0
 let sessionQueue        = []
-// Docker manages Postgres (see docker-compose.yml)
 let notificationSession = false  // true only when session was fired by the notification timer
 
 // First window from login-at-launch: show catalog in state for the renderer but keep the window hidden until activate
@@ -113,38 +99,86 @@ function sizeForView(type) {
   return { pill: PILL, card: CARD, catalog: CATALOG, chat: CHAT, knowledge: KNOWLEDGE, analytics: ANALYTICS }[type] || CATALOG
 }
 
-// ── Anthropic client ──────────────────────────────────────────────────────────
-function getAI() {
-  const key = settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY
-  if (!key) throw new Error('No API key — add it in ⚙ settings')
-  return new Anthropic({ apiKey: key })
+// ── Remote server helpers ────────────────────────────────────────────────────
+function getServerUrl() {
+  return (settings.serverUrl || process.env.KNOWLEDGE_SCRIBE_URL || '').replace(/\/$/, '')
 }
 
-// ── DB health check ──────────────────────────────────────────────────────────
+function getServerHeaders() {
+  const token = settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || ''
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+async function serverFetch(path, body, method = 'POST') {
+  const url = getServerUrl()
+  if (!url) throw new Error('No server URL — add it in ⚙ settings')
+  const resp = await fetch(`${url}${path}`, {
+    method,
+    headers: getServerHeaders(),
+    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Server error ${resp.status}: ${text}`)
+  }
+  return resp.json()
+}
+
+async function serverGet(path) {
+  const url = getServerUrl()
+  if (!url) throw new Error('No server URL — add it in ⚙ settings')
+  const resp = await fetch(`${url}${path}`, { headers: getServerHeaders() })
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => resp.statusText)
+    throw new Error(`Server error ${resp.status}: ${text}`)
+  }
+  return resp.json()
+}
+
+// ── AI client (proxied through remote server) ───────────────────────────────
+function getAI() {
+  // Fallback to local Anthropic client if API key is set directly
+  const key = settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY
+  if (key) return new Anthropic({ apiKey: key })
+  // Return a proxy object that routes through the remote server
+  return {
+    messages: {
+      create: async (params) => serverFetch('/api/chat', params),
+    },
+  }
+}
+
+// ── Server health check ─────────────────────────────────────────────────────
 async function isDbReady() {
   try {
-    await db.pool.query('SELECT 1')
-    return true
+    const resp = await serverGet('/api/health')
+    return resp.ok === true
   } catch {
     return false
   }
 }
 
-// ── Card loading (from Postgres) ─────────────────────────────────────────────
+// ── Card loading (from remote server) ────────────────────────────────────────
 async function loadCards() {
-  return db.getAllCards()
+  const resp = await serverGet('/api/cards')
+  return resp.cards
 }
 
 // ── DB-backed state (in-memory cache, persisted to Postgres) ─────────────────
 
-// Sync wrappers that persist to db in background (fire-and-forget)
+// Sync wrappers that persist to server in background (fire-and-forget)
 function persistCardState(cardId) {
   invalidateCaches()
-  db.upsertCardState(cardId, cardState[cardId]).catch(e => console.error('[db] persist card state failed:', e))
+  serverFetch(`/api/card-state/${encodeURIComponent(cardId)}`, cardState[cardId], 'PUT')
+    .catch(e => console.error('[server] persist card state failed:', e))
 }
 
 function persistSettings() {
-  db.saveAllSettings(settings).catch(e => console.error('[db] persist settings failed:', e))
+  serverFetch('/api/settings', { settings }, 'PUT')
+    .catch(e => console.error('[server] persist settings failed:', e))
 }
 
 // Session state: always go through db (async)
@@ -154,7 +188,7 @@ async function saveCardEdit(card, newFront, newBack) {
   const isQA = card.type === 'qa'
   const fields = { front: newFront, back: newBack }
   if (!isQA) { fields.when = ''; fields.how = newBack; fields.example = '' }
-  await db.updateCard(card.id, fields)
+  await serverFetch(`/api/cards/${encodeURIComponent(card.id)}`, fields, 'PATCH')
   const c = cards.find(x => x.id === card.id)
   if (c) {
     c.front = newFront
@@ -167,7 +201,7 @@ async function saveCardEdit(card, newFront, newBack) {
 
 async function saveQaTagsForRow(cardId, tagsStr) {
   const tags = tagsStr.split(' ').filter(Boolean)
-  await db.updateCardTags(cardId, tags)
+  await serverFetch(`/api/cards/${encodeURIComponent(cardId)}/tags`, { tags }, 'PATCH')
   const c = cards.find(x => x.id === cardId)
   if (c) c.tags = tags
   invalidateCaches()
@@ -177,9 +211,10 @@ async function saveQaTagsForRow(cardId, tagsStr) {
 async function deleteCardById(cardId) {
   const card = cards.find(c => c.id === cardId)
   if (!card) return false
-  await db.deleteCard(cardId)
+  await serverFetch(`/api/cards/${encodeURIComponent(cardId)}`, undefined, 'DELETE')
   delete cardState[cardId]
-  db.deleteCardState(cardId).catch(err => console.error('[db] delete card state failed:', err))
+  serverFetch(`/api/card-state/${encodeURIComponent(cardId)}`, undefined, 'DELETE')
+    .catch(err => console.error('[server] delete card state failed:', err))
   cards = cards.filter(c => c.id !== cardId)
   if (currentCard?.id === cardId) currentCard = null
   sessionQueue = sessionQueue.filter(c => c.id !== cardId)
@@ -263,7 +298,7 @@ function getStats() {
 
 // ── Activity tracking ─────────────────────────────────────────────────────────
 function trackActivity() {
-  db.trackActivity().catch(e => console.error('[db] track activity failed:', e))
+  serverFetch('/api/activity/track', {}).catch(e => console.error('[server] track activity failed:', e))
 }
 
 // ── Gap card generation ──────────────────────────────────────────────────────
@@ -274,13 +309,15 @@ async function generateGapCards(cardIds) {
   try {
     if (pendingGapCards.length >= MAX_PENDING_GAP_CARDS) return
 
-    const lowSessions = await db.getLowScoreSessions(cardIds)
+    const lowResp = await serverFetch('/api/sessions/low-score', { cardIds })
+    const lowSessions = lowResp.sessions
     if (!lowSessions.length) return
 
     const ai = getAI()
 
     // Load recent denials to improve generation
-    const denials = await db.getRecentDenials(5)
+    const denialsResp = await serverGet('/api/gap-feedback/recent-denials?limit=5')
+    const denials = denialsResp.denials
     let denialContext = ''
     if (denials.length) {
       denialContext = '\n\nThe user has previously rejected these suggested gap cards — learn from their feedback:\n' +
@@ -333,11 +370,11 @@ Return ONLY valid JSON:
           console.log(`[gap-cards] Suggested: ${parsed.front.slice(0, 60)}...`)
         } else {
           // No card generated — mark session as processed
-          await db.markGapCardGenerated([session.id])
+          await serverFetch('/api/sessions/mark-gap-generated', { sessionIds: [session.id] })
         }
       } catch (e) {
         console.error(`[gap-cards] Failed for session ${session.id}:`, e.message)
-        await db.markGapCardGenerated([session.id])
+        await serverFetch('/api/sessions/mark-gap-generated', { sessionIds: [session.id] })
       }
     }
   } catch (e) {
@@ -351,13 +388,13 @@ ipcMain.handle('gap-card:approve', async (_, { id }) => {
   if (idx === -1) return { ok: false }
   const suggestion = pendingGapCards.splice(idx, 1)[0]
 
-  await db.insertCard({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  await serverFetch('/api/cards', { id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
   cardState[suggestion.id] = { interval: 1, streak: 0, gotCount: 0, missCount: 0, nextReview: Date.now() }
   cards.push({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
   invalidateCaches()
   persistCardState(suggestion.id)
-  await db.markGapCardGenerated([suggestion.sessionId])
-  await db.appendGapFeedback({
+  await serverFetch('/api/sessions/mark-gap-generated', { sessionIds: [suggestion.sessionId] })
+  await serverFetch('/api/gap-feedback', {
     cardFront: suggestion.front, cardBack: suggestion.back,
     sourceCardFront: suggestion.sourceCardFront, approved: true, ts: Date.now(),
   })
@@ -376,8 +413,8 @@ ipcMain.handle('gap-card:deny', async (_, { id, reason }) => {
   if (idx === -1) return { ok: false }
   const suggestion = pendingGapCards.splice(idx, 1)[0]
 
-  await db.markGapCardGenerated([suggestion.sessionId])
-  await db.appendGapFeedback({
+  await serverFetch('/api/sessions/mark-gap-generated', { sessionIds: [suggestion.sessionId] })
+  await serverFetch('/api/gap-feedback', {
     cardFront: suggestion.front, cardBack: suggestion.back,
     sourceCardFront: suggestion.sourceCardFront, approved: false, reason: reason || null, ts: Date.now(),
   })
@@ -392,11 +429,11 @@ ipcMain.handle('gap-card:deny', async (_, { id, reason }) => {
 
 // ── Card embeddings ───────────────────────────────────────────────────────────
 async function loadCardEmbeddings() {
-  return db.getCardEmbeddings()
+  return serverGet('/api/card-embeddings')
 }
 
 async function saveCardEmbeddings(data) {
-  await db.saveCardEmbeddings(data)
+  await serverFetch('/api/card-embeddings', data, 'PUT')
 }
 
 function cosineSim(a, b) {
@@ -409,7 +446,7 @@ function cosineSim(a, b) {
 
 // ── Eval log ──────────────────────────────────────────────────────────────────
 function appendEvalLog(entry) {
-  db.appendEvalEntry(entry).catch(e => console.error('[db] eval log failed:', e))
+  serverFetch('/api/eval-log', entry).catch(e => console.error('[server] eval log failed:', e))
 }
 
 // ── Analytics ─────────────────────────────────────────────────────────────────
@@ -442,7 +479,7 @@ async function getAnalytics() {
   })).sort((a, b) => b.total - a.total)
 
   let activityData = {}
-  try { activityData = await db.getActivityLog() } catch {}
+  try { activityData = (await serverGet('/api/activity')).activity } catch {}
   const activityByDay = []
   for (let i = 29; i >= 0; i--) {
     const d   = new Date(now - i * 86400000)
@@ -729,8 +766,8 @@ function showStudyNotification(card, remaining) {
 async function handleNotificationReply(card, answer) {
   try {
     // Always start a fresh session for notification-triggered study
-    let session = await db.createSession(card.id)
-    await db.appendMessage(session.id, card.id, 'user', answer)
+    let session = (await serverFetch('/api/sessions', { cardId: card.id })).session
+    await serverFetch('/api/messages', { sessionId: session.id, cardId: card.id, role: 'user', content: answer })
 
     const ai = getAI()
     const msg = await ai.messages.create({
@@ -751,8 +788,8 @@ async function handleNotificationReply(card, answer) {
       score = parsed.score
       feedback = parsed.feedback
       const aiContent = `**${['Incorrect', 'Partial', 'Correct'][score]}** — ${feedback}`
-      await db.appendMessage(session.id, card.id, 'assistant', aiContent, { score })
-      await db.setSessionScore(session.id, score)
+      await serverFetch('/api/messages', { sessionId: session.id, cardId: card.id, role: 'assistant', content: aiContent, score })
+      await serverFetch(`/api/sessions/${encodeURIComponent(session.id)}/score`, { score }, 'PUT')
       appendEvalLog({ cardId: card.id, front: card.front, answer, score, feedback, ts: Date.now() })
 
       // Record spaced repetition only on successful evaluation
@@ -760,7 +797,7 @@ async function handleNotificationReply(card, answer) {
       recordAnswer(card.id, correct)
       invalidateCaches()
     } catch {
-      await db.appendMessage(session.id, card.id, 'assistant', raw)
+      await serverFetch('/api/messages', { sessionId: session.id, cardId: card.id, role: 'assistant', content: raw })
     }
 
     // Show result notification — reply to discuss, click to open in app
@@ -812,12 +849,12 @@ async function handleFollowUp(card, reply, nextCard) {
     // Cancel pending next-card timer — user is still discussing
     if (nextCardTimer) { clearTimeout(nextCardTimer); nextCardTimer = null }
 
-    let session = await db.getCurrentSession(card.id)
-    if (!session) session = await db.createSession(card.id)
-    await db.appendMessage(session.id, card.id, 'user', reply)
+    let session = (await serverGet(`/api/sessions/current?cardId=${encodeURIComponent(card.id)}`)).session
+    if (!session) session = (await serverFetch('/api/sessions', { cardId: card.id })).session
+    await serverFetch('/api/messages', { sessionId: session.id, cardId: card.id, role: 'user', content: reply })
 
     const ai = getAI()
-    session = await db.getCurrentSession(card.id)
+    session = (await serverGet(`/api/sessions/current?cardId=${encodeURIComponent(card.id)}`)).session
     const history = session ? session.messages : []
     const aiMessages = [
       { role: 'user', content: `You are a study assistant helping a student review a flashcard. Be concise (1-3 sentences).\n\nCard question: ${card.front}\n\nCorrect answer: ${card.back}\n\nHere is the conversation so far. Continue naturally.` },
@@ -831,7 +868,7 @@ async function handleFollowUp(card, reply, nextCard) {
       messages: aiMessages,
     })
     const text = msg.content[0].text.trim()
-    await db.appendMessage(session.id, card.id, 'assistant', text)
+    await serverFetch('/api/messages', { sessionId: session.id, cardId: card.id, role: 'assistant', content: text })
 
     activeNotification = new Notification({ silent: true, timeoutType: 'never',
       title: `💬 ${card.front.substring(0, 40)}`,
@@ -885,8 +922,8 @@ ipcMain.handle('dev:seed-cards', async () => {
     { front: 'Explain the difference between == and === in JavaScript', back: '== performs type coercion before comparison (e.g. "1" == 1 is true). === checks value AND type without coercion (strict equality).' },
   ]
   for (const c of testCards) {
-    const id = require('crypto').randomUUID()
-    await db.pool.query('INSERT INTO cards (id, type, front, back, tags) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [id, 'qa', c.front, c.back, ['dev-test']])
+    const id = crypto.randomUUID()
+    await serverFetch('/api/cards', { id, type: 'qa', front: c.front, back: c.back, tags: ['dev-test'] })
   }
   cards = await loadCards()
   invalidateCaches()
@@ -1011,36 +1048,58 @@ ipcMain.on('settings:save', (_, s) => {
 ipcMain.handle('settings:get', () => settings)
 ipcMain.handle('stats:get',    () => getStats())
 ipcMain.handle('catalog:get',  () => getCatalog())
-ipcMain.handle('repos:get',   () => db.getDistinctRepos())
+ipcMain.handle('repos:get',   async () => (await serverGet('/api/repos')).repos)
+
+// ── MCP config ───────────────────────────────────────────────────────────────
+ipcMain.handle('mcp:configure', async () => {
+  try {
+    const url = getServerUrl()
+    const token = settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || ''
+    if (!url) return { ok: false, error: 'Set a server URL first' }
+
+    const configPath = path.join(os.homedir(), '.claude.json')
+    let config = {}
+    try {
+      config = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e
+    }
+
+    if (!config.mcpServers) config.mcpServers = {}
+    config.mcpServers['knowledge-scribe'] = {
+      type: 'url',
+      url: `${url}/mcp`,
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    }
+
+    fs.mkdirSync(path.dirname(configPath), { recursive: true })
+    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
 
 // ── Knowledge IPC ─────────────────────────────────────────────────────────────
 ipcMain.on('knowledge', () => showKnowledge())
 
-ipcMain.handle('knowledge:get-logs', () => db.getAllProblemLogs())
+ipcMain.handle('knowledge:get-logs', async () => (await serverGet('/api/problem-logs')).logs)
 
-ipcMain.handle('knowledge:get-log', (_, { filename }) => db.getProblemLog(filename))
+ipcMain.handle('knowledge:get-log', async (_, { filename }) => (await serverGet(`/api/problem-logs/${encodeURIComponent(filename)}`)).content)
 
-ipcMain.handle('knowledge:search', (_, { query }) => {
-  return new Promise(resolve => {
-    const cliPath = path.join(KNOWLEDGE_MCP_DIR, 'cli.py')
-    const env = {
-      ...process.env,
-      OPENAI_API_KEY: settings.openaiApiKey || process.env.OPENAI_API_KEY || '',
-      ANTHROPIC_API_KEY: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '',
-    }
-    const proc = spawn('python3', [cliPath, 'search', '--query', query, '--n', '5'], { env })
-    let out = ''
-    proc.stdout.on('data', d => { out += d })
-    proc.stderr.on('data', d => { out += d })
-    proc.on('close', () => resolve(out.trim() || 'No results found.'))
-    proc.on('error', e => resolve(`Error: ${e.message}`))
-  })
+ipcMain.handle('knowledge:search', async (_, { query }) => {
+  try {
+    const resp = await serverFetch('/api/search', { query, n: 5 })
+    return resp.result || 'No results found.'
+  } catch (e) {
+    return `Error: ${e.message}`
+  }
 })
 
 ipcMain.handle('knowledge:chroma-status', () => isDbReady())
 
 ipcMain.handle('knowledge:related', async (_, { filename }) => {
-  const content = await db.getProblemLog(filename)
+  const content = (await serverGet(`/api/problem-logs/${encodeURIComponent(filename)}`)).content
   if (!content) return { ok: false, error: 'Log not found' }
   const fm = {}
   const m = content.match(/^---\n([\s\S]*?)\n---/)
@@ -1052,42 +1111,30 @@ ipcMain.handle('knowledge:related', async (_, { filename }) => {
   }
   const query = fm.problem || content.slice(0, 500)
 
-  return new Promise(resolve => {
-    const cliPath = path.join(KNOWLEDGE_MCP_DIR, 'cli.py')
-    const env = {
-      ...process.env,
-      RESEARCH_DIR: RESEARCH_DIR,
-      OPENAI_API_KEY: settings.openaiApiKey || process.env.OPENAI_API_KEY || '',
-      ANTHROPIC_API_KEY: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '',
+  try {
+    const resp = await serverFetch('/api/search', { query, n: 6 })
+    const out = resp.result || ''
+    const related = []
+    const blocks = out.split(/^### /m).filter(Boolean)
+    for (const block of blocks) {
+      const lines = block.split('\n')
+      const header = lines[0] || ''
+      const fnameMatch = header.match(/^(\S+\.md)\s+\(similarity\s+(\d+)%\)/)
+      if (!fnameMatch) continue
+      const fn = fnameMatch[1]
+      if (fn === filename) continue
+      const sim = parseInt(fnameMatch[2], 10)
+      related.push({ filename: fn, similarity: sim })
     }
-    const proc = spawn('python3', [cliPath, 'search', '--query', query, '--n', '6'], { env })
-    let out = ''
-    proc.stdout.on('data', d => { out += d })
-    proc.stderr.on('data', d => { out += d })
-    proc.on('close', () => {
-      // Parse results into structured data — each result starts with "### filename"
-      const related = []
-      const blocks = out.split(/^### /m).filter(Boolean)
-      for (const block of blocks) {
-        const lines = block.split('\n')
-        const header = lines[0] || ''
-        const fnameMatch = header.match(/^(\S+\.md)\s+\(similarity\s+(\d+)%\)/)
-        if (!fnameMatch) continue
-        const fn = fnameMatch[1]
-        if (fn === filename) continue // skip self
-        const sim = parseInt(fnameMatch[2], 10)
-        // Extract problem from the log list we already have
-        related.push({ filename: fn, similarity: sim })
-      }
-      resolve({ ok: true, related: related.slice(0, 5) })
-    })
-    proc.on('error', () => resolve({ ok: false, error: 'Search failed' }))
-  })
+    return { ok: true, related: related.slice(0, 5) }
+  } catch (e) {
+    return { ok: false, error: e.message || 'Search failed' }
+  }
 })
 
 ipcMain.handle('knowledge:combine', async (_, { filename1, filename2 }) => {
-  const content1 = await db.getProblemLog(filename1)
-  const content2 = await db.getProblemLog(filename2)
+  const content1 = (await serverGet(`/api/problem-logs/${encodeURIComponent(filename1)}`)).content
+  const content2 = (await serverGet(`/api/problem-logs/${encodeURIComponent(filename2)}`)).content
   if (!content1 || !content2) return { ok: false, error: 'Log not found' }
 
   try {
@@ -1129,13 +1176,13 @@ Output ONLY the merged markdown — no preamble, no explanation.`,
     try { tags = JSON.parse(fm.tags || '[]') } catch {}
 
     // Update first log with merged content
-    await db.upsertProblemLog({
+    await serverFetch('/api/problem-logs', {
       filename: filename1, date: fm.date || null, type: fm.type || 'coding',
       problem: fm.problem || filename1, tags, content: merged,
-    })
+    }, 'PUT')
 
     // Mark second log as merged
-    await db.markLogMerged(filename2, filename1)
+    await serverFetch('/api/problem-logs/mark-merged', { filename: filename2, mergedIntoId: filename1 })
 
     return { ok: true, resultFilename: filename1 }
   } catch (e) {
@@ -1150,7 +1197,7 @@ ipcMain.handle('analytics:get', () => getAnalytics())
 // ── Card embeddings IPC ───────────────────────────────────────────────────────
 ipcMain.handle('cards:index-embeddings', async () => {
   try {
-    const key = getOpenAIKey()
+    const key = null
     const texts = cards.map(c => `${c.front}\n${c.back}`.slice(0, 8000))
     const vecs = await openaiEmbeddings(texts, key)
     const data = { model: 'text-embedding-3-small', indexed_at: Date.now(), embeddings: {} }
@@ -1166,7 +1213,7 @@ ipcMain.handle('cards:index-embeddings', async () => {
 
 ipcMain.handle('cards:semantic-search', async (_, { query }) => {
   try {
-    const key = getOpenAIKey()
+    const key = null
     const embData = await loadCardEmbeddings()
     if (!Object.keys(embData.embeddings || {}).length) {
       return { ok: false, error: 'No embeddings — run Index Cards first' }
@@ -1196,19 +1243,19 @@ ipcMain.handle('cards:set-tags', async (_, { cardId, tags }) => {
 
 // ── Conversation IPC ──────────────────────────────────────────────────────────
 ipcMain.handle('conversation:get-sessions', async (_, { cardId }) => {
-  return db.getCardSessions(cardId)
+  return (await serverGet(`/api/sessions?cardId=${encodeURIComponent(cardId)}`)).sessions
 })
 
 ipcMain.handle('conversation:get-current', async (_, { cardId }) => {
-  return db.getCurrentSession(cardId)
+  return (await serverGet(`/api/sessions/current?cardId=${encodeURIComponent(cardId)}`)).session
 })
 
 ipcMain.handle('conversation:start', async (_, { cardId }) => {
-  return db.createSession(cardId)
+  return (await serverFetch('/api/sessions', { cardId })).session
 })
 
 ipcMain.handle('conversation:clear', async (_, { cardId }) => {
-  await db.deleteCardConversations(cardId)
+  await serverFetch(`/api/sessions?cardId=${encodeURIComponent(cardId)}`, undefined, 'DELETE')
   return { ok: true }
 })
 
@@ -1227,16 +1274,16 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
   }
 
   // Ensure a session exists, start one if not
-  let session = await db.getCurrentSession(cardId)
-  if (!session) session = await db.createSession(cardId)
+  let session = (await serverGet(`/api/sessions/current?cardId=${encodeURIComponent(cardId)}`)).session
+  if (!session) session = (await serverFetch('/api/sessions', { cardId })).session
 
   // Save user message to current session
-  await db.appendMessage(session.id, cardId, 'user', answer)
+  await serverFetch('/api/messages', { sessionId: session.id, cardId, role: 'user', content: answer })
 
   const cardContext = `Card question: ${card.front}\n\nCorrect answer: ${card.back}${refContext}`
 
   // Reload session messages for AI context
-  session = await db.getCurrentSession(cardId)
+  session = (await serverGet(`/api/sessions/current?cardId=${encodeURIComponent(cardId)}`)).session
   const history = session ? session.messages : []
   const aiMessages = []
 
@@ -1259,7 +1306,7 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
   try {
     const ai = getAI()
     const msg = await ai.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-4-6',
       max_tokens: 300,
       messages: aiMessages,
     })
@@ -1271,16 +1318,16 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
       try {
         const parsed = JSON.parse(cleaned)
         const aiContent = `**${['Incorrect', 'Partial', 'Correct'][parsed.score]}** — ${parsed.feedback}`
-        await db.appendMessage(session.id, cardId, 'assistant', aiContent, { score: parsed.score })
-        await db.setSessionScore(session.id, parsed.score)
+        await serverFetch('/api/messages', { sessionId: session.id, cardId, role: 'assistant', content: aiContent, score: parsed.score })
+        await serverFetch(`/api/sessions/${encodeURIComponent(session.id)}/score`, { score: parsed.score }, 'PUT')
         appendEvalLog({ cardId, front: card.front, answer, score: parsed.score, feedback: parsed.feedback, ts: Date.now() })
         return { ok: true, score: parsed.score, feedback: parsed.feedback }
       } catch {
-        await db.appendMessage(session.id, cardId, 'assistant', raw)
+        await serverFetch('/api/messages', { sessionId: session.id, cardId, role: 'assistant', content: raw })
         return { ok: true, score: -1, feedback: raw }
       }
     } else {
-      await db.appendMessage(session.id, cardId, 'assistant', raw)
+      await serverFetch('/api/messages', { sessionId: session.id, cardId, role: 'assistant', content: raw })
       return { ok: true, score: -1, feedback: raw }
     }
   } catch (e) {
@@ -1288,27 +1335,34 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
   }
 })
 
-// ── OpenAI embeddings + auto-tag ──────────────────────────────────────────────
-function getOpenAIKey() {
-  const key = settings.openaiApiKey || process.env.OPENAI_API_KEY
-  if (!key) throw new Error('No OpenAI API key — add it in settings or OPENAI_API_KEY')
-  return key
-}
+// ── Embeddings (proxied through remote server or local OpenAI) ───────────────
+async function openaiEmbeddings(texts, _key) {
+  // Try remote server first, fall back to direct OpenAI
+  const key = _key || settings.openaiApiKey || process.env.OPENAI_API_KEY
+  const serverUrl = getServerUrl()
 
-async function openaiEmbeddings(texts, key) {
   const out = []
   for (let i = 0; i < texts.length; i += 64) {
     const chunk = texts.slice(i, i + 64)
-    const res = await fetch('https://api.openai.com/v1/embeddings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-      body: JSON.stringify({ model: 'text-embedding-3-small', input: chunk }),
-    })
-    if (!res.ok) throw new Error(`OpenAI embeddings: ${await res.text()}`)
-    const j = await res.json()
-    const sorted = j.data.slice().sort((a, b) => a.index - b.index)
-    for (const row of sorted) {
-      const e = row.embedding
+    let embeddings
+
+    if (serverUrl) {
+      const resp = await serverFetch('/api/embed', { texts: chunk })
+      embeddings = resp.embeddings
+    } else if (key) {
+      const res = await fetch('https://api.openai.com/v1/embeddings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+        body: JSON.stringify({ model: 'text-embedding-3-small', input: chunk }),
+      })
+      if (!res.ok) throw new Error(`OpenAI embeddings: ${await res.text()}`)
+      const j = await res.json()
+      embeddings = j.data.sort((a, b) => a.index - b.index).map(d => d.embedding)
+    } else {
+      throw new Error('No server URL or OpenAI key configured')
+    }
+
+    for (const e of embeddings) {
       const v = new Float32Array(e.length)
       for (let d = 0; d < e.length; d++) v[d] = e[d]
       normalizeVector(v)
@@ -1393,7 +1447,7 @@ async function runAutoTagAll() {
   const MAX_CLUSTERS = 7
   const MISC_THRESHOLD = 0.25  // cosine similarity below this = poor fit → misc
 
-  const key = getOpenAIKey()
+  const key = null
   const qa = cards.filter(c => c.type === 'qa')
   if (qa.length === 0) throw new Error('No Q&A cards to tag')
   let k = Math.min(MAX_CLUSTERS, qa.length)
@@ -1481,8 +1535,8 @@ ipcMain.handle('undo-delete', async (_, { token }) => {
   if (!stash) return { ok: false }
   delete undoRegistry[token]
 
-  // Re-insert card into Postgres
-  await db.insertCard(stash.card)
+  // Re-insert card into remote server
+  await serverFetch('/api/cards', stash.card)
   // Restore card state
   if (stash.cardState) {
     cardState[stash.card.id] = stash.cardState
@@ -1596,10 +1650,10 @@ Output ONLY a JSON code block:
   try { parsed = JSON.parse(m[1].trim()) } catch { return { ok: false, error: 'Invalid JSON from AI' } }
   if (!parsed.front || !parsed.back) return { ok: false, error: 'Missing front or back' }
 
-  // Insert new merged card into Postgres
+  // Insert new merged card into server
   const mergedId = newId()
   const tagsArr = (parsed.tags || toMerge[0].tags?.join(' ') || '').split(' ').filter(Boolean)
-  await db.insertCard({ id: mergedId, type: 'qa', front: parsed.front.trim(), back: parsed.back.trim(), tags: tagsArr })
+  await serverFetch('/api/cards', { id: mergedId, type: 'qa', front: parsed.front.trim(), back: parsed.back.trim(), tags: tagsArr })
 
   cards = await loadCards()
   refreshCatalogView()
@@ -1663,23 +1717,19 @@ Help them build deep understanding of the underlying concept. Be conversational,
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
 app.whenReady().then(async () => {
-  // Initialize database
-  await db.initSchema()
-  await db.migrateFromFiles({
-    stateFile: STATE_FILE,
-    settingsFile: SETTINGS_FILE,
-    activityFile: ACTIVITY_FILE,
-    evalLogFile: EVAL_LOG_FILE,
-    conversationsFile: CONVERSATIONS_FILE,
-    embeddingsFile: CARD_EMBEDDINGS_FILE,
-    cardsFile: CARDS_FILE,
-    conceptFile: CONCEPT_FILE,
-    logsDir: LOGS_DIR,
-  })
-
-  settings  = await db.getSettings(DEFAULTS)
-  cardState = await db.getAllCardState()
-  cards     = await loadCards()
+  // Load all startup data from remote server in one call
+  try {
+    const bootstrap = await serverGet('/api/bootstrap')
+    settings  = { ...DEFAULTS, ...bootstrap.settings }
+    cardState = bootstrap.cardState
+    cards     = bootstrap.cards
+  } catch (e) {
+    console.error('[startup] Failed to load from server:', e.message)
+    // Continue with defaults — user can configure server URL in settings
+    settings  = { ...DEFAULTS }
+    cardState = {}
+    cards     = []
+  }
 
   const openedAsLoginItem = app.getLoginItemSettings().wasOpenedAtLogin
 
@@ -1692,7 +1742,7 @@ app.whenReady().then(async () => {
 
   app.setLoginItemSettings({ openAtLogin: !!settings.launchAtLogin, openAsHidden: true })
   scheduleNext()
-  // ChromaDB + Postgres managed by docker-compose (scripts/dev)
+  // All data managed by remote server
 
   app.on('activate', async () => {
     // In-memory state is authoritative (write-through) — skip DB reload if cards are already loaded
@@ -1721,6 +1771,5 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', e => e.preventDefault())
 
 app.on('before-quit', () => {
-  // Docker services cleaned up by scripts/dev trap
-  db.close().catch(err => console.error('[db] close failed:', err))
+  // No local cleanup needed — all state is on the remote server
 })

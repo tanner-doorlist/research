@@ -21,7 +21,6 @@
     "dompurify": "^3.3.3",
     "highlight.js": "^11.11.0",
     "marked": "^15.0.0",
-    "pg": "^8.20.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "remove-markdown": "^0.6.0",
@@ -68,7 +67,6 @@
     "files": [
       "main.js",
       "preload.js",
-      "db.js",
       "dist-renderer/**/*",
       "package.json",
       "node_modules/**/*"

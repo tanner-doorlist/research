@@ -42,6 +42,9 @@ export interface Settings {
   cardsPerSession: number
   launchAtLogin: boolean
   retireThreshold: number
+  serverUrl?: string
+  teamToken?: string
+  // Legacy — kept for backward compat with existing DB rows
   anthropicApiKey?: string
   openaiApiKey?: string
 }
@@ -155,6 +158,7 @@ export interface ElectronAPI {
   approveGapCard: (id: string) => Promise<{ ok: boolean }>
   denyGapCard: (id: string, reason?: string) => Promise<{ ok: boolean }>
 
+  configureMcp: () => Promise<{ ok: boolean; error?: string }>
   getView: () => Promise<ViewState>
   onView: (cb: (v: ViewState) => void) => void
   offView: (cb: (v: ViewState) => void) => void
