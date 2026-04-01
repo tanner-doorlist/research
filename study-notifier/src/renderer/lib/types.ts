@@ -6,6 +6,7 @@ export interface Card {
   front: string
   back: string
   tags: string[]
+  repo?: string | null
   when?: string
   how?: string
   example?: string
@@ -30,6 +31,7 @@ export interface CatalogItem {
   dueLabel: string
   streak: number
   tags: string[]
+  repo?: string | null
   retired: boolean
   flagged: boolean
 }
@@ -71,6 +73,7 @@ export interface KnowledgeLog {
   date: string
   problem: string
   tags: string
+  repo?: string | null
 }
 
 export interface ViewState {
@@ -121,6 +124,7 @@ export interface ElectronAPI {
   getSettings: () => Promise<Settings>
   getStats: () => Promise<Stats>
   getCatalog: () => Promise<CatalogItem[]>
+  getRepos: () => Promise<string[]>
 
   editCardChat: (messages: { role: string; content: string }[], card: Card) => Promise<string>
   applyCardEdit: (cardId: string, front: string, back: string) => Promise<{ ok: boolean }>

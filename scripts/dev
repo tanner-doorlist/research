@@ -38,6 +38,13 @@ if [ -f "$REPO_DIR/knowledge-mcp/docker-compose.yml" ]; then
   cd "$REPO_DIR"
 fi
 
+# Stop any container holding port 5432 (e.g. another worktree's Postgres)
+BLOCKING_CONTAINER=$(docker ps --filter "publish=5432" --format "{{.Names}}" 2>/dev/null | head -1)
+if [ -n "$BLOCKING_CONTAINER" ]; then
+  echo "    Stopping $BLOCKING_CONTAINER (holding port 5432)"
+  docker stop "$BLOCKING_CONTAINER" 2>/dev/null || true
+fi
+
 echo "==> Starting Postgres"
 docker compose up -d
 

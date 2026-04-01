@@ -475,6 +475,7 @@ function getCatalog() {
     return {
       id: card.id, type: card.type, front: card.front, got, miss, accuracy, dueLabel, streak: s?.streak || 0,
       tags: card.tags || [],
+      repo: card.repo || null,
       retired: !!s?.retired,
       flagged: !!s?.flagged,
     }
@@ -818,6 +819,7 @@ ipcMain.on('settings:save', (_, s) => {
 ipcMain.handle('settings:get', () => settings)
 ipcMain.handle('stats:get',    () => getStats())
 ipcMain.handle('catalog:get',  () => getCatalog())
+ipcMain.handle('repos:get',   () => db.getDistinctRepos())
 
 // ── Knowledge IPC ─────────────────────────────────────────────────────────────
 ipcMain.on('knowledge', () => showKnowledge())

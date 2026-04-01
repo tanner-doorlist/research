@@ -93,6 +93,7 @@ def process_unprocessed_logs() -> str:
     for log in logs:
         filename = log["filename"]
         content = log["content"]
+        log_repo = log.get("repo")
         print(f"  -> {filename}")
 
         try:
@@ -111,6 +112,7 @@ def process_unprocessed_logs() -> str:
                 front=c["front"],
                 back=c["back"],
                 tags=card_tags,
+                repo=log_repo,
             )
             total_qa += 1
 
@@ -135,6 +137,7 @@ def process_unprocessed_logs() -> str:
                 when_to_use=when,
                 how_it_works=how,
                 example=example,
+                repo=log_repo,
             )
             total_concept += 1
 

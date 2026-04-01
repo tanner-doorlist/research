@@ -1,7 +1,7 @@
-import { useState, useMemo, useRef, useCallback } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import type { CatalogItem, Stats } from '../lib/types'
 import { stripMarkdownPreview } from '../lib/markdown'
-import { Search, Trash2, Flag, Merge, Tag, X, Check } from 'lucide-react'
+import { Search, Trash2, Flag, Merge, Tag, X, Check, FolderOpen } from 'lucide-react'
 import { Spinner } from '../components/spinner'
 import {
   Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose,
@@ -15,6 +15,10 @@ export function CatalogView({ catalog, stats }: Props) {
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('active')
+  const [repos, setRepos] = useState<string[]>([])
+  const [activeRepo, setActiveRepo] = useState<string | null>(null)
+
+  useEffect(() => { window.api.getRepos().then(setRepos) }, [])
   const [semanticMode, setSemanticMode] = useState(false)
   const [semanticOrder, setSemanticOrder] = useState<string[] | null>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -45,6 +49,7 @@ export function CatalogView({ catalog, stats }: Props) {
     if (filterMode === 'active') items = items.filter(i => !i.retired && !i.flagged)
     else if (filterMode === 'flagged') items = items.filter(i => i.flagged)
     else if (filterMode === 'retired') items = items.filter(i => i.retired)
+    if (activeRepo) items = items.filter(i => i.repo === activeRepo)
     if (activeTag) items = items.filter((item) => item.tags?.includes(activeTag))
     if (search.trim()) {
       if (semanticMode && semanticOrder) {
@@ -56,7 +61,7 @@ export function CatalogView({ catalog, stats }: Props) {
       }
     }
     return items
-  }, [catalog, search, activeTag, filterMode, semanticMode, semanticOrder])
+  }, [catalog, search, activeTag, activeRepo, filterMode, semanticMode, semanticOrder])
 
   const looksLikeId = (s: string) => /^[0-9a-f-]{4,}$/i.test(s.trim())
 
@@ -192,6 +197,16 @@ export function CatalogView({ catalog, stats }: Props) {
             </div>
           </div>
 
+          {/* Repo filters — only shown when repos exist */}
+          {repos.length > 0 && (
+            <div className="flex gap-px px-[var(--spacing-x)] pb-1 overflow-x-auto shrink-0 scrollbar-none">
+              <FilterPill label="All repos" active={!activeRepo} icon={<FolderOpen size={10} />} onClick={() => setActiveRepo(null)} />
+              {repos.map(repo => (
+                <FilterPill key={repo} label={repo} active={activeRepo === repo} onClick={() => setActiveRepo(activeRepo === repo ? null : repo)} />
+              ))}
+            </div>
+          )}
+
           {/* Category filters */}
           {allTags.length > 0 && (
             <div className="flex gap-px px-[var(--spacing-x)] pb-1.5 overflow-x-auto shrink-0 scrollbar-none">
@@ -309,15 +324,15 @@ export function CatalogView({ catalog, stats }: Props) {
   )
 }
 
-function FilterPill({ label, active, variant, onClick }: { label: string; active: boolean; variant?: 'warning' | 'dim'; onClick: () => void }) {
+function FilterPill({ label, active, variant, icon, onClick }: { label: string; active: boolean; variant?: 'warning' | 'dim'; icon?: React.ReactNode; onClick: () => void }) {
   const activeStyle = variant === 'warning' ? 'bg-warning/15 text-warning'
     : variant === 'dim' ? 'bg-white/[0.06] text-text-secondary'
     : 'bg-accent-subtle text-accent'
   return (
     <button onClick={onClick}
-      className={`shrink-0 h-[22px] px-2 rounded-[var(--radius-sm)] border-none cursor-pointer text-[11px] font-medium transition-colors ${
+      className={`shrink-0 h-[22px] px-2 rounded-[var(--radius-sm)] border-none cursor-pointer text-[11px] font-medium transition-colors flex items-center gap-1 ${
         active ? activeStyle : 'bg-transparent text-text-tertiary hover:text-text-secondary'
-      }`}>{label}</button>
+      }`}>{icon}{label}</button>
   )
 }
 
@@ -379,6 +394,7 @@ function Row({ item, last, selectMode, isSelected, onToggle, onLongSelect }: {
         <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-text-tertiary">
           <span className="font-mono text-text-tertiary/50">{item.id.slice(0, 6)}</span>
           <span className="text-white/10">·</span>
+          {item.repo && <><span className="text-accent/40">{item.repo}</span><span className="text-white/10">·</span></>}
           {item.tags?.length > 0 && <span className="truncate max-w-[120px]">{item.tags.join(', ')}</span>}
           {item.tags?.length > 0 && <span className="text-white/10">·</span>}
           <span>{item.got}✓ {item.miss}✗</span>

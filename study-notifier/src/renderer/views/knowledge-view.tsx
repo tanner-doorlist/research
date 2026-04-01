@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import type { KnowledgeLog } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { Spinner } from '../components/spinner'
-import { Search, ArrowLeft, Merge } from 'lucide-react'
+import { Search, ArrowLeft, Merge, FolderOpen } from 'lucide-react'
 
 type Sub = 'list' | 'detail' | 'results'
 type RelatedLog = { filename: string; similarity: number }
@@ -11,6 +11,8 @@ export function KnowledgeView() {
   const [sub, setSub] = useState<Sub>('list')
   const [logs, setLogs] = useState<KnowledgeLog[]>([])
   const [dbOnline, setDbOnline] = useState<boolean | null>(null)
+  const [repos, setRepos] = useState<string[]>([])
+  const [activeRepo, setActiveRepo] = useState<string | null>(null)
   const [detail, setDetail] = useState('')
   const [detailFilename, setDetailFilename] = useState('')
   const [related, setRelated] = useState<RelatedLog[]>([])
@@ -20,7 +22,16 @@ export function KnowledgeView() {
   const [results, setResults] = useState('')
   const [searching, setSearching] = useState(false)
 
-  useEffect(() => { window.api.getKnowledgeLogs().then(setLogs); window.api.getChromaStatus().then(setDbOnline) }, [])
+  useEffect(() => {
+    window.api.getKnowledgeLogs().then(setLogs)
+    window.api.getChromaStatus().then(setDbOnline)
+    window.api.getRepos().then(setRepos)
+  }, [])
+
+  const filteredLogs = useMemo(() => {
+    if (!activeRepo) return logs
+    return logs.filter(l => l.repo === activeRepo)
+  }, [logs, activeRepo])
 
   const openLog = async (f: string) => {
     const c = await window.api.getKnowledgeLog(f)
@@ -68,6 +79,16 @@ export function KnowledgeView() {
         </span>
       </div>
 
+      {/* Repo filters — only shown when repos exist */}
+      {repos.length > 0 && (
+        <div className="flex gap-px px-[var(--spacing-x)] py-1 overflow-x-auto shrink-0 scrollbar-none border-b border-border">
+          <RepoFilterPill label="All repos" active={!activeRepo} onClick={() => setActiveRepo(null)} />
+          {repos.map(repo => (
+            <RepoFilterPill key={repo} label={repo} active={activeRepo === repo} onClick={() => setActiveRepo(activeRepo === repo ? null : repo)} />
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center gap-1.5 px-[var(--spacing-x)] py-1.5 border-b border-border shrink-0">
         <Search size={12} className="text-text-tertiary shrink-0" />
         <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && doSearch()}
@@ -78,14 +99,15 @@ export function KnowledgeView() {
 
       {sub === 'list' && (
         <div className="flex-1 overflow-y-auto">
-          {logs.length === 0 ? (
-            <div className="px-[var(--spacing-x)] py-6 text-[12px] text-text-tertiary text-center">No logs yet.</div>
-          ) : logs.map((log) => (
+          {filteredLogs.length === 0 ? (
+            <div className="px-[var(--spacing-x)] py-6 text-[12px] text-text-tertiary text-center">{logs.length > 0 ? 'No logs in this repo.' : 'No logs yet.'}</div>
+          ) : filteredLogs.map((log) => (
             <div key={log.filename} onClick={() => openLog(log.filename)}
               className="px-[var(--spacing-x)] py-2 cursor-pointer border-b border-white/[0.03] hover:bg-surface transition-colors">
               <div className="text-[12px] font-medium text-text-primary overflow-hidden whitespace-nowrap text-ellipsis">{log.problem}</div>
               <div className="flex gap-2 mt-px text-[10px] text-text-tertiary">
                 <span>{log.date || '—'}</span>
+                {log.repo && !activeRepo && <span className="text-accent/40">{log.repo}</span>}
                 {log.tags && <span className="text-accent/50">{tags(log.tags)}</span>}
               </div>
             </div>
@@ -140,5 +162,14 @@ export function KnowledgeView() {
         </div>
       )}
     </div>
+  )
+}
+
+function RepoFilterPill({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick}
+      className={`shrink-0 h-[22px] px-2 rounded-[var(--radius-sm)] border-none cursor-pointer text-[11px] font-medium transition-colors flex items-center gap-1 ${
+        active ? 'bg-accent-subtle text-accent' : 'bg-transparent text-text-tertiary hover:text-text-secondary'
+      }`}>{label}</button>
   )
 }
