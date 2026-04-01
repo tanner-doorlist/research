@@ -508,27 +508,35 @@ async function deleteCardState(cardId) {
 
 // ── Sessions & Messages ──────────────────────────────────────────────────────
 async function getCardSessions(cardId) {
-  const { rows: sessionRows } = await pool.query(
-    'SELECT * FROM sessions WHERE card_id = $1 ORDER BY started_at ASC', [cardId]
+  const { rows } = await pool.query(
+    `SELECT s.id as session_id, s.started_at, s.score as session_score,
+            m.id as msg_id, m.role, m.content, m.ts, m.score as msg_score
+     FROM sessions s
+     LEFT JOIN messages m ON m.session_id = s.id
+     WHERE s.card_id = $1
+     ORDER BY s.started_at ASC, m.ts ASC`,
+    [cardId]
   )
-  const sessions = []
-  for (const sr of sessionRows) {
-    const { rows: msgRows } = await pool.query(
-      'SELECT * FROM messages WHERE session_id = $1 ORDER BY ts ASC', [sr.id]
-    )
-    sessions.push({
-      id: sr.id,
-      startedAt: Number(sr.started_at),
-      score: sr.score,
-      messages: msgRows.map(m => ({
-        role: m.role,
-        content: m.content,
-        ts: Number(m.ts),
-        ...(m.score !== null ? { score: m.score } : {}),
-      })),
-    })
+  const sessionsMap = new Map()
+  for (const r of rows) {
+    if (!sessionsMap.has(r.session_id)) {
+      sessionsMap.set(r.session_id, {
+        id: r.session_id,
+        startedAt: Number(r.started_at),
+        score: r.session_score,
+        messages: [],
+      })
+    }
+    if (r.msg_id) {
+      sessionsMap.get(r.session_id).messages.push({
+        role: r.role,
+        content: r.content,
+        ts: Number(r.ts),
+        ...(r.msg_score !== null ? { score: r.msg_score } : {}),
+      })
+    }
   }
-  return sessions
+  return [...sessionsMap.values()]
 }
 
 async function getCurrentSession(cardId) {
