@@ -3,7 +3,7 @@
 MCP server + Electron macOS app. Coding agents log insights via MCP → Postgres (pgvector) → spaced repetition flashcards with AI-graded chat sessions that identify and fill knowledge gaps.
 
 ### Distribution Goal
-Ship as a single `.dmg` that coworkers install and immediately use — no Docker, no local Postgres, no manual setup. The app connects to a hosted Postgres instance (with pgvector). The `knowledge-mcp` server is distributed separately as an installable Python package (`pip install`) that coworkers add to their Claude Code/Cursor MCP config pointing at the same hosted database.
+Ship as a single `.dmg` that coworkers install and immediately use — no Docker, no local Postgres, no manual setup. The app connects to a hosted `remote-mcp-server` (TypeScript/Hono on GCP Cloud Run) that serves both REST endpoints and the MCP protocol. Coworkers add the remote MCP URL to their Claude Code/Cursor MCP config. Auth is via a shared `TEAM_TOKEN` bearer token.
 
 ### Multi-Repo Knowledge Spaces
 Devs work across multiple repos and want knowledge scoped per-repo (each repo gets its own cards/categories) with an "all" view across everything. Growth team members just want a single flat knowledge base. To support both:
@@ -17,18 +17,20 @@ Devs work across multiple repos and want knowledge scoped per-repo (each repo ge
 
 | Directory | Purpose |
 |-----------|---------|
-| `knowledge-mcp/` | Python MCP server — log knowledge, search, generate cards, review PRs |
+| `remote-mcp-server/` | TypeScript/Hono server — MCP + REST API, deployed to GCP Cloud Run |
+| `knowledge-mcp/` | Python MCP server (legacy local-only) — log knowledge, search, generate cards, review PRs |
 | `study-notifier/` | Electron macOS app — spaced repetition + chat-based study |
-| `docker-compose.yml` | Postgres 17 + pgvector local database |
-| `scripts/` | `setup` (install deps) and `dev` (start everything with hot reload) |
+| `infra/` | Terraform — GCP Cloud Run, Cloud SQL, Artifact Registry |
+| `docker-compose.yml` | Postgres 17 + pgvector (remote-mcp-server local dev only) |
+| `scripts/` | `setup` (install deps), `dev` (start Electron + Vite with hot reload), `deploy` (build + push + terraform apply) |
 
 ---
 
-## MCP Tools (knowledge-mcp/server.py)
+## MCP Tools (remote-mcp-server/src/mcp.ts)
 
 MCP server name: `knowledge-scribe`
 
-### `log_knowledge(ticket_id, raw_notes, tags?)`
+### `log_knowledge(ticket_id, raw_notes, tags?, repo?)`
 Embeds input → checks pgvector for semantic dups (0.88 cosine threshold) → merges with existing or formats as new → writes to `problem_logs` with embedding.
 
 ### `search_knowledge(query, n_results=3)`
@@ -37,8 +39,8 @@ Embeds query → pgvector cosine distance → returns similarity %, filename, da
 ### `generate_study_cards()`
 Reads unprocessed logs → Claude generates Q&A + concept cards → inserts into `cards` table → marks logs as processed.
 
-### `review_pr(pr_number, repo_path?)`
-Fetches PR via `gh` CLI → Claude extracts up to 3 learnable items → deduplicates → logs and auto-generates cards. Tags with `pr-review`, `pr-{pr_number}`.
+### `review_pr(pr_number, owner, repo)`
+Fetches PR via GitHub API (using `owner/repo`) → Claude extracts up to 3 learnable items → deduplicates → logs and auto-generates cards. Tags with `pr-review`, `pr-{pr_number}`.
 
 ---
 
@@ -46,24 +48,26 @@ Fetches PR via `gh` CLI → Claude extracts up to 3 learnable items → deduplic
 
 ```bash
 ./scripts/setup                    # install all deps (once per worktree)
-./scripts/dev                      # start Electron + Vite + Postgres with hot reload
+./scripts/dev                      # Electron + Vite (uses remote server)
+./scripts/dev --local-server       # Electron + Vite + local server + Postgres
 ```
 
-### knowledge-mcp
+### remote-mcp-server
 
 ```bash
-cd knowledge-mcp
-pip install -r requirements.txt
-python3 server.py                  # MCP server (stdio)
-
-# CLI alternatives
-python3 cli.py log --ticket "DLE-123" --notes "..." [--tags tag1,tag2]
-python3 cli.py search --query "..." [--n 3]
-python3 cli.py generate
-python3 index_existing.py          # backfill embeddings
+cd remote-mcp-server
+npm install
+npm run dev                        # tsx watch (local dev, needs Postgres + env vars)
+npm run build                      # tsc → dist/
 ```
 
-Requires: Postgres running, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`
+Requires: Postgres running, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TEAM_TOKEN`
+
+### Deploy
+
+```bash
+./scripts/deploy                   # Docker build + push + terraform apply
+```
 
 ### study-notifier
 
@@ -81,28 +85,29 @@ npm run build      # macOS .app → dist/
 ### Stack
 - **Electron 31** — macOS only (arm64 + x64)
 - **React 19 + TypeScript + Tailwind v4 + React Query** — renderer built with Vite
-- **Python 3 + MCP SDK** — knowledge ingestion server
-- **Postgres 17 + pgvector** — all data storage and vector search (Docker Compose)
+- **TypeScript + Hono + MCP SDK** — remote knowledge server (GCP Cloud Run)
+- **Postgres 17 + pgvector** — all data storage and vector search (Cloud SQL in prod)
+- **Terraform** — GCP infrastructure (Cloud Run, Cloud SQL, VPC, Artifact Registry)
 
 ### AI Models
 - `text-embedding-3-small` (OpenAI) — 1536-dim embeddings for dedup and semantic search
-- `claude-sonnet-4-6` — formatting, merging, answer evaluation, card generation (config.py)
+- `claude-sonnet-4-6` — formatting, merging, answer evaluation, card generation (config.ts)
 - `claude-haiku-4-5-20251001` — gap card suggestions (hardcoded in main.js)
 
 ### Electron Internals
-- **main.js** — main process: IPC handlers, spaced repetition scheduler, AI calls, in-memory card/state cache with write-through to Postgres
-- **db.js** — Postgres client (pool of 3), schema init, legacy migration
+- **main.js** — main process: IPC handlers, spaced repetition scheduler, AI calls, in-memory card/state cache with write-through to remote server
 - **preload.js** — IPC bridge (`window.api`)
 - **Renderer** — sandboxed React app, view state pushed from main.js via IPC (`use-view-state` hook)
 - **Views:** PillView → CardView → CatalogView | ChatView | KnowledgeView | AnalyticsView | EditOverlay
 - **Window sizes:** PILL (400x84), CARD (460x580), CATALOG (460x660), CHAT (460x580), KNOWLEDGE (560x700), ANALYTICS (460x620)
 
-### knowledge-mcp Internals
-- `knowledge_scribe/config.py` — model names, dedup threshold, DATABASE_URL
-- `knowledge_scribe/core.py` — embed(), slugify(), format/merge prompts
-- `knowledge_scribe/services/knowledge.py` — log and search flows
-- `knowledge_scribe/services/cards.py` — card generation from logs
-- `knowledge_scribe/db/postgres.py` — PostgresDB class, connection pool (1-5), pgvector queries
+### remote-mcp-server Internals
+- `src/config.ts` — model names, dedup threshold, DATABASE_URL, TEAM_TOKEN
+- `src/core.ts` — embed(), slugify(), format/merge prompts
+- `src/db.ts` — Postgres pool, schema init, CRUD helpers, pgvector queries
+- `src/mcp.ts` — MCP server with tool registrations
+- `src/routes.ts` — REST API routes (MCP tools, AI proxy, full CRUD for cards/state/sessions/settings/activity/embeddings/logs)
+- `src/tools/` — tool implementations (log-knowledge, search-knowledge, generate-cards, review-pr)
 
 ### Key Behaviors
 - **Spaced repetition:** SM-2 variant. Correct: `interval *= 2.5` (cap 180d). Wrong: `interval = 1`, retry in 10 min.

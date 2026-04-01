@@ -6,24 +6,53 @@ const ANNOY_LABELS = ['Off', 'Low', 'Med', 'High']
 
 export function SettingsPanel({ open, onClose }: Props) {
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [apiKey, setApiKey] = useState('')
-  const [openaiKey, setOpenaiKey] = useState('')
+  const [serverUrl, setServerUrl] = useState('')
+  const [teamToken, setTeamToken] = useState('')
   const [autoTagging, setAutoTagging] = useState(false)
+  const [configuring, setConfiguring] = useState(false)
+  const [configResult, setConfigResult] = useState<string | null>(null)
 
   useEffect(() => {
-    if (open) window.api.getSettings().then((s) => { setSettings(s); setApiKey(s.anthropicApiKey || ''); setOpenaiKey(s.openaiApiKey || '') })
+    if (open) {
+      window.api.getSettings().then((s) => {
+        setSettings(s)
+        setServerUrl(s.serverUrl || '')
+        setTeamToken(s.teamToken || '')
+      })
+      setConfigResult(null)
+    }
   }, [open])
 
   if (!open || !settings) return null
 
-  const save = () => { window.api.saveSettings({ ...settings, ...(apiKey && { anthropicApiKey: apiKey }), ...(openaiKey && { openaiApiKey: openaiKey }) }); onClose() }
+  const save = () => {
+    window.api.saveSettings({
+      ...settings,
+      serverUrl: serverUrl || undefined,
+      teamToken: teamToken || undefined,
+    })
+    onClose()
+  }
+
   const runAutoTag = async () => {
     setAutoTagging(true)
     try { const r = await window.api.autoTagCards(); if (!r.ok) alert(r.error || 'Auto-tag failed'); else window.api.openCatalog() }
     finally { setAutoTagging(false) }
   }
 
+  const configureMcp = async () => {
+    setConfiguring(true)
+    setConfigResult(null)
+    try {
+      const r = await window.api.configureMcp()
+      setConfigResult(r.ok ? 'Claude Code configured' : (r.error || 'Failed'))
+    } finally {
+      setConfiguring(false)
+    }
+  }
+
   const inputCls = "w-full bg-surface border border-border rounded-[var(--radius-md)] text-text-primary text-[12px] px-2.5 py-1.5 outline-none focus:border-accent/40 transition-colors"
+  const btnCls = "w-full h-7 border border-border rounded-[var(--radius-md)] bg-transparent text-text-secondary text-[12px] font-medium cursor-pointer hover:bg-surface hover:text-text-primary disabled:opacity-40 transition-colors"
 
   return (
     <div className="flex flex-col gap-[var(--spacing-gap)] px-[var(--spacing-x)] py-[var(--spacing-y)] shrink-0 border-t border-border no-drag">
@@ -44,18 +73,22 @@ export function SettingsPanel({ open, onClose }: Props) {
       </Row>
 
       <div className="flex flex-col gap-1">
-        <span className="text-[11px] text-text-secondary">Anthropic API key</span>
-        <input type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="sk-ant-..."
-          onFocus={(e) => (e.target.type = 'text')} onBlur={(e) => (e.target.type = 'password')} className={inputCls} />
+        <span className="text-[11px] text-text-secondary">Server URL</span>
+        <input type="text" value={serverUrl} onChange={(e) => setServerUrl(e.target.value)}
+          placeholder="https://knowledge-scribe.up.railway.app" className={inputCls} />
       </div>
       <div className="flex flex-col gap-1">
-        <span className="text-[11px] text-text-secondary">OpenAI API key</span>
-        <input type="password" value={openaiKey} onChange={(e) => setOpenaiKey(e.target.value)} placeholder="sk-..."
+        <span className="text-[11px] text-text-secondary">Team token</span>
+        <input type="password" value={teamToken} onChange={(e) => setTeamToken(e.target.value)} placeholder="token..."
           onFocus={(e) => (e.target.type = 'text')} onBlur={(e) => (e.target.type = 'password')} className={inputCls} />
       </div>
 
-      <button onClick={runAutoTag} disabled={autoTagging}
-        className="w-full h-7 border border-border rounded-[var(--radius-md)] bg-transparent text-text-secondary text-[12px] font-medium cursor-pointer hover:bg-surface hover:text-text-primary disabled:opacity-40 transition-colors">
+      <button onClick={configureMcp} disabled={configuring || !serverUrl} className={btnCls}>
+        {configuring ? 'Configuring...' : 'Connect Claude Code'}
+      </button>
+      {configResult && <span className="text-[11px] text-text-secondary text-center">{configResult}</span>}
+
+      <button onClick={runAutoTag} disabled={autoTagging} className={btnCls}>
         {autoTagging ? 'Running...' : 'Auto-generate categories'}
       </button>
       <button onClick={save}

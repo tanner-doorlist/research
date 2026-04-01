@@ -1,0 +1,7 @@
+project           = "doorlistdev"
+region            = "us-central1"
+db_password       = "a-strong-password"
+anthropic_api_key = "sk-ant-..."
+openai_api_key    = "sk-..."
+team_token        = "your-team-token"
+github_token      = "ghp_..."

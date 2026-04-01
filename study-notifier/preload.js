@@ -27,6 +27,7 @@ const api = {
   unflagCard:  (cardId)        => ipcRenderer.invoke('unflag-card', { cardId }),
   unretireCard:(cardId)        => ipcRenderer.invoke('unretire-card', { cardId }),
 
+  configureMcp:        () => ipcRenderer.invoke('mcp:configure'),
   devFireNotification: () => ipcRenderer.invoke('dev:fire-notification'),
   devSeedCards:        () => ipcRenderer.invoke('dev:seed-cards'),
   getView:     ()   => ipcRenderer.invoke('get-view'),
