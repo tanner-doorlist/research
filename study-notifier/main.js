@@ -1306,7 +1306,7 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
   try {
     const ai = getAI()
     const msg = await ai.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-sonnet-4-6',
       max_tokens: 300,
       messages: aiMessages,
     })

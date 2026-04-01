@@ -534,7 +534,7 @@ export async function getAllProblemLogs() {
     filename: r.filename,
     date: r.date instanceof Date ? r.date.toISOString().slice(0, 10) : (r.date || ''),
     problem: r.problem,
-    tags: r.tags ? JSON.stringify(r.tags) : '[]',
+    tags: r.tags || [],
     repo: r.repo || null,
   }))
 }
@@ -559,10 +559,10 @@ export async function upsertProblemLog(log: {
   )
 }
 
-export async function markLogMerged(filename: string, mergedIntoId: string) {
+export async function markLogMerged(filename: string, mergedIntoFilename: string) {
   await pool.query(
-    'UPDATE problem_logs SET merged_into = $1 WHERE filename = $2',
-    [mergedIntoId, filename],
+    'UPDATE problem_logs SET merged_into = (SELECT id FROM problem_logs WHERE filename = $1) WHERE filename = $2',
+    [mergedIntoFilename, filename],
   )
 }
 
