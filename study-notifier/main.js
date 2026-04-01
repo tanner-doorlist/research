@@ -687,8 +687,17 @@ function scheduleAnnoyance() {
     if (i >= sequence.length || !win?.isVisible()) return
     annoyTimer = setTimeout(() => {
       win?.webContents.send('annoy')
-      if (Notification.isSupported())
-        new Notification({ title: '🧠 Still waiting…', body: currentCard?.front?.substring(0, 80) || '' }).show()
+      if (Notification.isSupported() && currentCard) {
+        activeNotification = new Notification({ silent: true, timeoutType: 'never',
+          title: '🧠 Still waiting…',
+          body: currentCard.front.substring(0, 200),
+          hasReply: true,
+          replyPlaceholder: 'Type your answer…',
+        })
+        activeNotification.on('reply', (_, reply) => handleNotificationReply(currentCard, reply))
+        activeNotification.on('click', () => expandCard(currentCard))
+        activeNotification.show()
+      }
       i++; step()
     }, sequence[i])
   }
@@ -698,6 +707,191 @@ function scheduleAnnoyance() {
 function clearAnnoyTimer() {
   if (annoyTimer) { clearTimeout(annoyTimer); annoyTimer = null }
 }
+
+// ── Notification-inline study ────────────────────────────────────────────────
+// Hold a reference so notifications don't get garbage-collected before reply events fire
+let activeNotification = null
+let nextCardTimer = null
+
+function showStudyNotification(card, remaining) {
+  const label = remaining > 1 ? `(${remaining} cards)` : '(last card)'
+  activeNotification = new Notification({ silent: true, timeoutType: 'never',
+    title: `🧠 Study time ${label}`,
+    body: card.front.substring(0, 200),
+    hasReply: true,
+    replyPlaceholder: 'Type your answer…',
+  })
+  activeNotification.on('reply', (_, reply) => handleNotificationReply(card, reply))
+  activeNotification.on('click', () => expandCard(card))
+  activeNotification.show()
+}
+
+async function handleNotificationReply(card, answer) {
+  try {
+    // Always start a fresh session for notification-triggered study
+    let session = await db.createSession(card.id)
+    await db.appendMessage(session.id, card.id, 'user', answer)
+
+    const ai = getAI()
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: `You are evaluating a flashcard answer. Score it and give brief one-sentence feedback.\n\nCard question: ${card.front}\n\nCorrect answer: ${card.back}\n\nStudent's answer: ${answer}\n\nScore: 2 = fully correct, 1 = partially correct (key insight present but incomplete), 0 = incorrect.\n\nReturn ONLY valid JSON: {"score":0|1|2,"feedback":"one sentence feedback"}`
+      }],
+    })
+
+    const raw = msg.content[0].text.trim()
+    let score = -1, feedback = raw
+    try {
+      let cleaned = raw
+      if (cleaned.startsWith('```')) cleaned = cleaned.split('\n').slice(1, -1).join('\n')
+      const parsed = JSON.parse(cleaned)
+      score = parsed.score
+      feedback = parsed.feedback
+      const aiContent = `**${['Incorrect', 'Partial', 'Correct'][score]}** — ${feedback}`
+      await db.appendMessage(session.id, card.id, 'assistant', aiContent, { score })
+      await db.setSessionScore(session.id, score)
+      appendEvalLog({ cardId: card.id, front: card.front, answer, score, feedback, ts: Date.now() })
+
+      // Record spaced repetition only on successful evaluation
+      const correct = score >= 1
+      recordAnswer(card.id, correct)
+      invalidateCaches()
+    } catch {
+      await db.appendMessage(session.id, card.id, 'assistant', raw)
+    }
+
+    // Show result notification — reply to discuss, click to open in app
+    const emoji = score === 2 ? '✅' : score === 1 ? '🟡' : '❌'
+    const resultTitle = `${emoji} ${['Incorrect', 'Partial', 'Correct'][score] || 'Evaluated'}`
+
+    // Advance session index
+    sessionDone++
+    const foundIdx = sessionQueue.findIndex(c => c.id === card.id)
+    if (foundIdx === -1) return
+    const nextIdx = foundIdx + 1
+    const hasNext = nextIdx < sessionQueue.length
+
+    const resultBody = hasNext
+      ? `${feedback}\n\nReply to discuss · Click to open in app · Or wait for next card`
+      : `${feedback}\n\nSession complete! Reply to discuss · Click to open in app`
+
+    activeNotification = new Notification({ silent: true, timeoutType: 'never',
+      title: resultTitle,
+      body: resultBody,
+      hasReply: true,
+      replyPlaceholder: 'Ask a follow-up…',
+    })
+    activeNotification.on('reply', (_, reply) => handleFollowUp(card, reply, hasNext ? sessionQueue[nextIdx] : null))
+    activeNotification.on('click', () => expandCard(card))
+    activeNotification.show()
+
+    // If more cards, send the next one after a short delay (gives time to discuss)
+    if (hasNext) {
+      const nextCard = sessionQueue[nextIdx]
+      currentCard = nextCard
+      nextCardTimer = setTimeout(() => {
+        nextCardTimer = null
+        showStudyNotification(nextCard, sessionQueue.length - nextIdx)
+      }, 8000)
+    } else {
+      const finishedCardIds = sessionQueue.map(c => c.id)
+      generateGapCards(finishedCardIds)
+      if (notificationSession) hideWindow()
+    }
+  } catch (e) {
+    console.error('[notif-reply] evaluation failed:', e)
+    new Notification({ silent: true, title: '⚠️ Could not evaluate', body: 'Click to open the card instead.' }).on('click', () => expandCard(card)).show()
+  }
+}
+
+async function handleFollowUp(card, reply, nextCard) {
+  try {
+    // Cancel pending next-card timer — user is still discussing
+    if (nextCardTimer) { clearTimeout(nextCardTimer); nextCardTimer = null }
+
+    let session = await db.getCurrentSession(card.id)
+    if (!session) session = await db.createSession(card.id)
+    await db.appendMessage(session.id, card.id, 'user', reply)
+
+    const ai = getAI()
+    session = await db.getCurrentSession(card.id)
+    const history = session ? session.messages : []
+    const aiMessages = [
+      { role: 'user', content: `You are a study assistant helping a student review a flashcard. Be concise (1-3 sentences).\n\nCard question: ${card.front}\n\nCorrect answer: ${card.back}\n\nHere is the conversation so far. Continue naturally.` },
+      { role: 'assistant', content: 'Understood. I have the card context.' },
+      ...history.map(m => ({ role: m.role, content: m.content })),
+    ]
+
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 300,
+      messages: aiMessages,
+    })
+    const text = msg.content[0].text.trim()
+    await db.appendMessage(session.id, card.id, 'assistant', text)
+
+    activeNotification = new Notification({ silent: true, timeoutType: 'never',
+      title: `💬 ${card.front.substring(0, 40)}`,
+      body: `${text.substring(0, 250)}\n\nReply to continue · Click to open in app`,
+      hasReply: true,
+      replyPlaceholder: 'Ask more…',
+    })
+    activeNotification.on('reply', (_, followUp) => handleFollowUp(card, followUp, nextCard))
+    activeNotification.on('click', () => expandCard(card))
+    activeNotification.show()
+  } catch (e) {
+    console.error('[notif-followup] failed:', e)
+    new Notification({ silent: true, title: '⚠️ Follow-up failed', body: 'Click to open the card.' }).on('click', () => expandCard(card)).show()
+  }
+}
+
+// Dev helpers — trigger from renderer console: window.api.devFireNotification() / devSeedCards()
+ipcMain.handle('dev:fire-notification', async () => {
+  const c = await loadCards()
+  if (!c.length) return { ok: false, reason: 'no cards in DB — run window.api.devSeedCards() first' }
+  // For dev: reset all card state so everything is "due"
+  for (const card of c) {
+    if (cardState[card.id]) {
+      cardState[card.id].nextReview = 0
+      persistCardState(card.id)
+    }
+  }
+  invalidateCaches()
+
+  const queue = buildSessionQueue()
+  if (!queue.length) return { ok: false, reason: 'no due cards', totalCards: c.length }
+
+  // Set up session state so reply handler works
+  sessionQueue = queue
+  sessionDone  = 0
+  notificationSession = true
+  currentCard = queue[0]
+
+  const supported = Notification.isSupported()
+  if (!supported) return { ok: false, reason: 'Notification.isSupported() returned false' }
+
+  // Delay 3s so you can click away from the app — macOS suppresses notifs from focused apps
+  setTimeout(() => showStudyNotification(currentCard, queue.length), 3000)
+  return { ok: true, cards: queue.length, first: queue[0].front.substring(0, 60), note: 'notification fires in 3s — click away from this window' }
+})
+
+ipcMain.handle('dev:seed-cards', async () => {
+  const testCards = [
+    { front: 'What is the event loop in Node.js?', back: 'A single-threaded loop that processes async callbacks from the task queue after the call stack is empty. Uses libuv under the hood with phases: timers, poll, check, close.' },
+    { front: 'What does ACID stand for in databases?', back: 'Atomicity (all-or-nothing), Consistency (valid state transitions), Isolation (concurrent txns don\'t interfere), Durability (committed data survives crashes).' },
+    { front: 'Explain the difference between == and === in JavaScript', back: '== performs type coercion before comparison (e.g. "1" == 1 is true). === checks value AND type without coercion (strict equality).' },
+  ]
+  for (const c of testCards) {
+    const id = require('crypto').randomUUID()
+    await db.pool.query('INSERT INTO cards (id, type, front, back, tags) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING', [id, 'qa', c.front, c.back, ['dev-test']])
+  }
+  cards = await loadCards()
+  invalidateCaches()
+  return { ok: true, totalCards: cards.length }
+})
 
 // ── Notification scheduler ────────────────────────────────────────────────────
 function scheduleNext(overrideMinutes) {
@@ -721,9 +915,7 @@ async function fireNotification() {
   showPill(currentCard)
 
   if (Notification.isSupported()) {
-    const n = new Notification({ title: `🧠 Study time (${sessionQueue.length} cards)`, body: currentCard.front.substring(0, 100) })
-    n.on('click', () => expandCard(currentCard))
-    n.show()
+    showStudyNotification(currentCard, sessionQueue.length)
   }
 
   scheduleNext()
