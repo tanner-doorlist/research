@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useViewState } from './hooks/use-view-state'
 import { useAnnoy } from './hooks/use-annoy'
 import { Shell } from './components/shell'
 import { Titlebar } from './components/titlebar'
 import { SettingsPanel } from './components/settings-panel'
+import { GapCardToast } from './components/gap-card-toast'
 import { PillView } from './views/pill-view'
 import { CardView } from './views/card-view'
 import { CatalogView } from './views/catalog-view'
@@ -11,11 +12,20 @@ import { ChatView } from './views/chat-view'
 import { KnowledgeView } from './views/knowledge-view'
 import { AnalyticsView } from './views/analytics-view'
 import { cn } from './lib/utils'
+import type { GapCardSuggestion } from './lib/types'
 
 export default function App() {
   const view = useViewState()
   const shaking = useAnnoy()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [gapSuggestion, setGapSuggestion] = useState<GapCardSuggestion | null>(null)
+
+  // Listen for gap card suggestions from main process
+  useEffect(() => {
+    const handler = (s: GapCardSuggestion) => setGapSuggestion(s)
+    window.api.onGapCardSuggestion(handler)
+    return () => window.api.offGapCardSuggestion(handler)
+  }, [])
 
   if (view.type === 'hidden') return null
   if (view.type === 'pill') return <PillView {...view} />
@@ -61,6 +71,10 @@ export default function App() {
 
         {!isCard && (
           <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        )}
+
+        {gapSuggestion && (
+          <GapCardToast suggestion={gapSuggestion} onDone={() => setGapSuggestion(null)} />
         )}
       </Shell>
     </div>

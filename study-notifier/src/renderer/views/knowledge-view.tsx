@@ -2,32 +2,69 @@ import { useState, useEffect } from 'react'
 import type { KnowledgeLog } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { Spinner } from '../components/spinner'
-import { Search, ArrowLeft } from 'lucide-react'
+import { Search, ArrowLeft, Merge } from 'lucide-react'
 
 type Sub = 'list' | 'detail' | 'results'
+type RelatedLog = { filename: string; similarity: number }
 
 export function KnowledgeView() {
   const [sub, setSub] = useState<Sub>('list')
   const [logs, setLogs] = useState<KnowledgeLog[]>([])
-  const [chromaOnline, setChromaOnline] = useState<boolean | null>(null)
+  const [dbOnline, setDbOnline] = useState<boolean | null>(null)
   const [detail, setDetail] = useState('')
+  const [detailFilename, setDetailFilename] = useState('')
+  const [related, setRelated] = useState<RelatedLog[]>([])
+  const [loadingRelated, setLoadingRelated] = useState(false)
+  const [combining, setCombining] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState('')
   const [searching, setSearching] = useState(false)
 
-  useEffect(() => { window.api.getKnowledgeLogs().then(setLogs); window.api.getChromaStatus().then(setChromaOnline) }, [])
+  useEffect(() => { window.api.getKnowledgeLogs().then(setLogs); window.api.getChromaStatus().then(setDbOnline) }, [])
 
-  const openLog = async (f: string) => { const c = await window.api.getKnowledgeLog(f); if (c) { setDetail(c); setSub('detail') } }
+  const openLog = async (f: string) => {
+    const c = await window.api.getKnowledgeLog(f)
+    if (c) {
+      setDetail(c); setDetailFilename(f); setSub('detail')
+      setRelated([]); setLoadingRelated(true)
+      window.api.getRelatedLogs(f).then(r => {
+        if (r.ok && r.related) setRelated(r.related)
+        setLoadingRelated(false)
+      })
+    }
+  }
+
+  const combineWith = async (otherFilename: string) => {
+    setCombining(true)
+    const r = await window.api.combineLogs(detailFilename, otherFilename)
+    if (r.ok && r.resultFilename) {
+      // Refresh logs and reopen merged result
+      const newLogs = await window.api.getKnowledgeLogs()
+      setLogs(newLogs)
+      const c = await window.api.getKnowledgeLog(r.resultFilename)
+      if (c) {
+        setDetail(c); setDetailFilename(r.resultFilename)
+        setRelated([]); setLoadingRelated(true)
+        window.api.getRelatedLogs(r.resultFilename).then(res => {
+          if (res.ok && res.related) setRelated(res.related)
+          setLoadingRelated(false)
+        })
+      }
+    }
+    setCombining(false)
+  }
+
   const doSearch = async () => { const q = query.trim(); if (!q) return; setSub('results'); setSearching(true); setResults(await window.api.searchKnowledge(q)); setSearching(false) }
   const tags = (s: string) => s.replace(/[\[\]"]/g, '').split(',').map((t) => t.trim()).filter(Boolean).join(', ')
+  const logTitle = (filename: string) => logs.find(l => l.filename === filename)?.problem || filename
 
   return (
     <div className="flex-1 min-h-0 flex flex-col overflow-hidden no-drag">
       <div className="flex items-center gap-2 px-[var(--spacing-x)] h-8 shrink-0 border-b border-border">
         <span className="text-[13px] font-semibold">Knowledge</span>
         <span className="text-[10px] text-text-tertiary">{logs.length} logs</span>
-        <span className={`text-[10px] ml-auto ${chromaOnline ? 'text-success/70' : chromaOnline === false ? 'text-danger/70' : 'text-text-tertiary'}`}>
-          {chromaOnline ? 'DB connected' : chromaOnline === false ? 'DB offline' : '...'}
+        <span className={`text-[10px] ml-auto ${dbOnline ? 'text-success/70' : dbOnline === false ? 'text-danger/70' : 'text-text-tertiary'}`}>
+          {dbOnline ? 'DB connected' : dbOnline === false ? 'DB offline' : '...'}
         </span>
       </div>
 
@@ -58,10 +95,34 @@ export function KnowledgeView() {
 
       {sub === 'detail' && (
         <div className="flex-1 overflow-y-auto px-[var(--spacing-x)] py-3 flex flex-col gap-2">
-          <button onClick={() => setSub('list')} className="bg-transparent border-none text-text-tertiary text-[11px] cursor-pointer text-left p-0 flex items-center gap-1 hover:text-text-secondary">
+          <button onClick={() => { setSub('list'); setRelated([]) }} className="bg-transparent border-none text-text-tertiary text-[11px] cursor-pointer text-left p-0 flex items-center gap-1 hover:text-text-secondary">
             <ArrowLeft size={11} /> Back
           </button>
           <div className="text-[12px] leading-[1.7]"><MarkdownRender content={detail} /></div>
+
+          {/* Related notes */}
+          <div className="mt-2 pt-2 border-t border-border">
+            <span className="text-[11px] font-semibold text-text-secondary">Related notes</span>
+            {loadingRelated && <div className="flex items-center gap-2 py-2 text-[11px] text-text-tertiary"><Spinner /> Finding related...</div>}
+            {combining && <div className="flex items-center gap-2 py-2 text-[11px] text-accent"><Spinner /> Combining notes...</div>}
+            {!loadingRelated && related.length === 0 && !combining && (
+              <div className="py-2 text-[11px] text-text-tertiary">No related notes found.</div>
+            )}
+            {related.map(r => (
+              <div key={r.filename} className="flex items-center gap-2 py-1.5 border-b border-white/[0.03]">
+                <button onClick={() => openLog(r.filename)}
+                  className="flex-1 min-w-0 bg-transparent border-none text-left cursor-pointer p-0 text-[11px] text-text-primary hover:text-accent transition-colors truncate">
+                  {logTitle(r.filename)}
+                </button>
+                <span className="text-[10px] text-text-tertiary shrink-0">{r.similarity}%</span>
+                <button onClick={() => combineWith(r.filename)} disabled={combining}
+                  title="Combine into this note"
+                  className="w-6 h-6 border-none rounded-[var(--radius-md)] bg-transparent text-text-tertiary cursor-pointer flex items-center justify-center hover:bg-surface hover:text-accent transition-colors disabled:opacity-40 shrink-0">
+                  <Merge size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -5,6 +5,7 @@ const os      = require('os')
 const crypto  = require('crypto')
 const { spawn } = require('child_process')
 const Anthropic = require('@anthropic-ai/sdk')
+const db      = require('./db')
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 function isUuid(s) {
@@ -15,16 +16,18 @@ function newId() {
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
-const RESEARCH_DIR       = path.join(os.homedir(), 'research')
+const RESEARCH_DIR       = process.env.RESEARCH_DIR || path.join(os.homedir(), 'research')
+const KNOWLEDGE_MCP_DIR  = path.join(RESEARCH_DIR, 'knowledge-mcp')
+// Legacy file paths — used only for one-time migration to Postgres
 const CARDS_FILE         = path.join(RESEARCH_DIR, 'study-cards', 'qa_cards.tsv')
 const CONCEPT_FILE       = path.join(RESEARCH_DIR, 'study-cards', 'concept_cards.tsv')
 const STATE_FILE         = path.join(RESEARCH_DIR, 'study-cards', '.card_state.json')
 const SETTINGS_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.settings.json')
-const LOGS_DIR               = path.join(RESEARCH_DIR, 'problem-logs')
-const KNOWLEDGE_MCP_DIR      = path.join(RESEARCH_DIR, 'knowledge-mcp')
-const CARD_EMBEDDINGS_FILE   = path.join(RESEARCH_DIR, 'study-cards', '.card_embeddings.json')
-const EVAL_LOG_FILE          = path.join(RESEARCH_DIR, 'study-cards', '.evaluation_log.json')
-const ACTIVITY_FILE          = path.join(RESEARCH_DIR, 'study-cards', '.activity_log.json')
+const LOGS_DIR           = path.join(RESEARCH_DIR, 'problem-logs')
+const CARD_EMBEDDINGS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.card_embeddings.json')
+const EVAL_LOG_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.evaluation_log.json')
+const ACTIVITY_FILE      = path.join(RESEARCH_DIR, 'study-cards', '.activity_log.json')
+const CONVERSATIONS_FILE = path.join(RESEARCH_DIR, 'study-cards', '.card_conversations.json')
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 const DEFAULTS = {
@@ -32,7 +35,7 @@ const DEFAULTS = {
   annoyanceLevel: 2,
   cardsPerSession: 3,
   launchAtLogin: true,
-  categoryClusterK: 8,
+  retireThreshold: 5,
 }
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -46,7 +49,7 @@ let annoyTimer     = null
 let isExpanded     = false
 let sessionDone         = 0
 let sessionQueue        = []
-let chromaProc          = null
+// Docker manages Postgres (see docker-compose.yml)
 let notificationSession = false  // true only when session was fired by the notification timer
 
 // First window from login-at-launch: show catalog in state for the renderer but keep the window hidden until activate
@@ -73,234 +76,64 @@ function getAI() {
   return new Anthropic({ apiKey: key })
 }
 
-// ── ChromaDB auto-start ───────────────────────────────────────────────────────
-async function isChromaRunning() {
+// ── DB health check ──────────────────────────────────────────────────────────
+async function isDbReady() {
   try {
-    const res = await fetch('http://localhost:8000/api/v2/heartbeat', { signal: AbortSignal.timeout(1500) })
-    return res.ok
+    await db.pool.query('SELECT 1')
+    return true
   } catch {
     return false
   }
 }
 
-async function startChroma() {
-  const running = await isChromaRunning()
-  if (running) return
-  const chromaBin = path.join(KNOWLEDGE_MCP_DIR, '.venv', 'bin', 'chroma')
-  const dbPath    = path.join(KNOWLEDGE_MCP_DIR, 'chroma_db')
-  if (!fs.existsSync(chromaBin)) return
-  chromaProc = spawn(chromaBin, ['run', '--path', dbPath], { detached: false, stdio: 'ignore' })
-  chromaProc.on('error', () => { chromaProc = null })
-  chromaProc.on('exit',  () => { chromaProc = null })
+// ── Card loading (from Postgres) ─────────────────────────────────────────────
+async function loadCards() {
+  return db.getAllCards()
 }
 
-// ── File I/O ──────────────────────────────────────────────────────────────────
-function migrateCardStateIfNeeded(mapOldToNew) {
-  if (!mapOldToNew || !Object.keys(mapOldToNew).length) return
-  for (const [oldId, newId] of Object.entries(mapOldToNew)) {
-    if (cardState[oldId] !== undefined) {
-      cardState[newId] = cardState[oldId]
-      delete cardState[oldId]
-    }
-  }
-  saveState()
+// ── DB-backed state (in-memory cache, persisted to Postgres) ─────────────────
+
+// Sync wrappers that persist to db in background (fire-and-forget)
+function persistCardState(cardId) {
+  db.upsertCardState(cardId, cardState[cardId]).catch(e => console.error('[db] persist card state failed:', e))
 }
 
-function migrateQaTsv() {
-  if (!fs.existsSync(CARDS_FILE)) return
-  const lines = fs.readFileSync(CARDS_FILE, 'utf8').split('\n').filter(l => l.trim().length > 0)
-  if (lines.length === 0) return
-  const mapOldToNew = {}
-  let start = 0
-  const h0 = lines[0].split('\t')[0]
-  if (h0.toLowerCase() === 'front' || h0.toLowerCase() === 'id') start = 1
-  const out = ['id\tfront\tback\ttags']
-  let legacyIdx = 0
-  let changed = false
-  for (let i = start; i < lines.length; i++) {
-    const parts = lines[i].split('\t')
-    if (parts.length >= 1 && isUuid(parts[0])) {
-      out.push(lines[i])
-      continue
-    }
-    changed = true
-    const id = newId()
-    mapOldToNew[`qa_${legacyIdx}`] = id
-    legacyIdx++
-    out.push([id, parts[0] || '', parts[1] || '', (parts[2] || '').trim()].join('\t'))
-  }
-  if (changed) {
-    fs.writeFileSync(CARDS_FILE, out.join('\n') + '\n')
-    migrateCardStateIfNeeded(mapOldToNew)
-  }
+function persistSettings() {
+  db.saveAllSettings(settings).catch(e => console.error('[db] persist settings failed:', e))
 }
 
-function migrateConceptTsv() {
-  if (!fs.existsSync(CONCEPT_FILE)) return
-  const lines = fs.readFileSync(CONCEPT_FILE, 'utf8').split('\n').filter(l => l.trim().length > 0)
-  if (lines.length === 0) return
-  const mapOldToNew = {}
-  let start = 0
-  const h0 = lines[0].split('\t')[0]
-  if (h0.toLowerCase() === 'concept' || h0.toLowerCase() === 'id') start = 1
-  const out = ['id\tconcept\twhen\thow\texample']
-  let legacyIdx = 0
-  let changed = false
-  for (let i = start; i < lines.length; i++) {
-    const parts = lines[i].split('\t')
-    if (parts.length >= 1 && isUuid(parts[0])) {
-      out.push(lines[i])
-      continue
-    }
-    changed = true
-    const id = newId()
-    mapOldToNew[`concept_${legacyIdx}`] = id
-    legacyIdx++
-    out.push([id, parts[0] || '', parts[1] || '', parts[2] || '', parts[3] || ''].join('\t'))
-  }
-  if (changed) {
-    fs.writeFileSync(CONCEPT_FILE, out.join('\n') + '\n')
-    migrateCardStateIfNeeded(mapOldToNew)
-  }
-}
+// Session state: always go through db (async)
+// No in-memory cache needed — sessions are loaded per-card on demand
 
-function runMigrations() {
-  migrateQaTsv()
-  migrateConceptTsv()
-}
-
-function loadCards() {
-  runMigrations()
-  const all = []
-
-  if (fs.existsSync(CARDS_FILE)) {
-    const lines = fs.readFileSync(CARDS_FILE, 'utf8').trim().split('\n').slice(1)
-    lines.forEach((line) => {
-      const parts = line.split('\t')
-      if (parts.length < 4) return
-      const id = parts[0]
-      const front = parts[1]
-      const back = parts[2]
-      const tags = (parts[3] || '').split(' ').filter(Boolean)
-      if (!front?.trim() || !isUuid(id)) return
-      all.push({
-        id, type: 'qa',
-        front: front.trim(), back: (back || '').trim(),
-        tags,
-      })
-    })
-  }
-
-  if (fs.existsSync(CONCEPT_FILE)) {
-    const lines = fs.readFileSync(CONCEPT_FILE, 'utf8').trim().split('\n').slice(1)
-    lines.forEach((line) => {
-      const parts = line.split('\t')
-      if (parts.length < 5) return
-      const id = parts[0]
-      const concept = parts[1]
-      const when = (parts[2] || '').trim()
-      const how = (parts[3] || '').trim()
-      const example = (parts[4] || '').trim()
-      if (!concept?.trim() || !isUuid(id)) return
-      const backParts = [
-        when && `**When:** ${when}`,
-        how && `**How:** ${how}`,
-        example && `**Example:** ${example}`,
-      ].filter(Boolean)
-      const back = backParts.length ? backParts.join('\n\n') : how
-      all.push({
-        id, type: 'concept',
-        front: concept.trim(),
-        when, how, example,
-        back,
-        tags: ['concept'],
-      })
-    })
-  }
-
-  return all
-}
-
-function loadState() {
-  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8')) } catch { return {} }
-}
-
-function saveState() {
-  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true })
-  fs.writeFileSync(STATE_FILE, JSON.stringify(cardState, null, 2))
-}
-
-function loadSettings() {
-  try { return { ...DEFAULTS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) } }
-  catch { return { ...DEFAULTS } }
-}
-
-function saveSettings() {
-  fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true })
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2))
-}
-
-function saveCardEdit(card, newFront, newBack) {
+async function saveCardEdit(card, newFront, newBack) {
   const isQA = card.type === 'qa'
-  const file  = isQA ? CARDS_FILE : CONCEPT_FILE
-  if (!fs.existsSync(file)) return false
-
-  const lines = fs.readFileSync(file, 'utf8').split('\n')
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split('\t')
-    if (parts[0] !== card.id) continue
-    if (isQA) {
-      lines[i] = [card.id, newFront, newBack, parts[3] || ''].join('\t')
-    } else {
-      lines[i] = [card.id, newFront, '', newBack, ''].join('\t')
-    }
-    fs.writeFileSync(file, lines.join('\n'))
-    const c = cards.find(x => x.id === card.id)
-    if (c) {
-      c.front = newFront
-      c.back = newBack
-      if (!isQA) { c.when = ''; c.how = newBack; c.example = '' }
-    }
-    return true
+  const fields = { front: newFront, back: newBack }
+  if (!isQA) { fields.when = ''; fields.how = newBack; fields.example = '' }
+  await db.updateCard(card.id, fields)
+  const c = cards.find(x => x.id === card.id)
+  if (c) {
+    c.front = newFront
+    c.back = newBack
+    if (!isQA) { c.when = ''; c.how = newBack; c.example = '' }
   }
-  return false
+  return true
 }
 
-function saveQaTagsForRow(cardId, tagsStr) {
-  if (!fs.existsSync(CARDS_FILE)) return false
-  const lines = fs.readFileSync(CARDS_FILE, 'utf8').split('\n')
-  for (let i = 1; i < lines.length; i++) {
-    const parts = lines[i].split('\t')
-    if (parts[0] !== cardId) continue
-    lines[i] = [parts[0], parts[1], parts[2], tagsStr].join('\t')
-    fs.writeFileSync(CARDS_FILE, lines.join('\n'))
-    const c = cards.find(x => x.id === cardId)
-    if (c && c.type === 'qa') c.tags = tagsStr.split(' ').filter(Boolean)
-    return true
-  }
-  return false
+async function saveQaTagsForRow(cardId, tagsStr) {
+  const tags = tagsStr.split(' ').filter(Boolean)
+  await db.updateCardTags(cardId, tags)
+  const c = cards.find(x => x.id === cardId)
+  if (c) c.tags = tags
+  return true
 }
 
-function deleteCardById(cardId) {
+async function deleteCardById(cardId) {
   const card = cards.find(c => c.id === cardId)
   if (!card) return false
-  const file = card.type === 'qa' ? CARDS_FILE : CONCEPT_FILE
-  if (!fs.existsSync(file)) return false
-  const lines = fs.readFileSync(file, 'utf8').split('\n')
-  const out = [lines[0]]
-  let removed = false
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].split('\t')[0] === cardId) {
-      removed = true
-      continue
-    }
-    out.push(lines[i])
-  }
-  if (!removed) return false
-  fs.writeFileSync(file, out.join('\n'))
+  await db.deleteCard(cardId)
   delete cardState[cardId]
-  saveState()
-  cards = loadCards()
+  db.deleteCardState(cardId).catch(() => {})
+  cards = cards.filter(c => c.id !== cardId)
   if (currentCard?.id === cardId) currentCard = null
   sessionQueue = sessionQueue.filter(c => c.id !== cardId)
   return true
@@ -312,7 +145,7 @@ function deleteCardById(cardId) {
 function pickCard(exclude = [], dutyOnly = false) {
   if (!cards.length) return null
   const now = Date.now()
-  const pool = cards.filter(c => !exclude.includes(c.id))
+  const pool = cards.filter(c => !exclude.includes(c.id) && !cardState[c.id]?.retired && !cardState[c.id]?.flagged)
   if (!pool.length) return null
 
   const unseen = pool.filter(c => !cardState[c.id])
@@ -356,7 +189,12 @@ function recordAnswer(cardId, correct) {
   }
   s.lastSeen = Date.now()
   cardState[cardId] = s
-  saveState()
+  // Auto-retire cards that have been mastered
+  const threshold = settings.retireThreshold || 5
+  if (correct && s.streak >= threshold && s.interval >= 180) {
+    s.retired = true
+  }
+  persistCardState(cardId)
   trackActivity()
 }
 
@@ -364,7 +202,8 @@ function getStats() {
   const now   = Date.now()
   const total = cards.length
   const seen  = Object.keys(cardState).length
-  const due   = cards.filter(c => !cardState[c.id] || cardState[c.id].nextReview <= now).length
+  const active = cards.filter(c => !cardState[c.id]?.retired && !cardState[c.id]?.flagged)
+  const due   = active.filter(c => !cardState[c.id] || cardState[c.id].nextReview <= now).length
   const streak = Object.values(cardState).reduce((max, s) => Math.max(max, s.streak || 0), 0)
   const totalGot  = Object.values(cardState).reduce((n, s) => n + (s.gotCount  || 0), 0)
   const totalMiss = Object.values(cardState).reduce((n, s) => n + (s.missCount || 0), 0)
@@ -373,24 +212,135 @@ function getStats() {
 
 // ── Activity tracking ─────────────────────────────────────────────────────────
 function trackActivity() {
-  const today = new Date().toISOString().slice(0, 10)
-  let data = {}
-  try { data = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8')) } catch {}
-  data[today] = (data[today] || 0) + 1
-  try {
-    fs.mkdirSync(path.dirname(ACTIVITY_FILE), { recursive: true })
-    fs.writeFileSync(ACTIVITY_FILE, JSON.stringify(data))
-  } catch {}
+  db.trackActivity().catch(e => console.error('[db] track activity failed:', e))
 }
+
+// ── Gap card generation ──────────────────────────────────────────────────────
+let pendingGapCards = [] // queue of { id, front, back, tags, sourceCardFront, sessionId }
+
+async function generateGapCards(cardIds) {
+  try {
+    const lowSessions = await db.getLowScoreSessions(cardIds)
+    if (!lowSessions.length) return
+
+    const ai = getAI()
+
+    // Load recent denials to improve generation
+    const denials = await db.getRecentDenials(5)
+    let denialContext = ''
+    if (denials.length) {
+      denialContext = '\n\nThe user has previously rejected these suggested gap cards — learn from their feedback:\n' +
+        denials.map(d => `- Rejected: "${d.card_front}" (for card: "${d.source_card_front}") — Reason: ${d.reason}`).join('\n') +
+        '\n\nAvoid generating cards that would be rejected for similar reasons.\n'
+    }
+
+    for (const session of lowSessions) {
+      const convo = session.messages.map(m => `${m.role}: ${m.content}`).join('\n')
+      const prompt = `A student was quizzed on a flashcard and scored ${session.score}/2 (${session.score === 0 ? 'incorrect' : 'partial'}).
+
+Card question: ${session.cardFront}
+Correct answer: ${session.cardBack}
+
+Conversation:
+${convo}
+${denialContext}
+Based on this conversation, identify the specific knowledge gap — what did the student misunderstand, miss, or confuse?
+
+If there is a clear, targetable gap, generate ONE flashcard that would help fill it. The card should test the specific misunderstanding, NOT just repeat the original question. It might test a prerequisite concept, a distinction the student conflated, or a detail they overlooked.
+
+If there's not enough signal to generate a useful card (e.g. the student just didn't attempt an answer, or the gap is too vague), return {"skip": true}.
+
+Return ONLY valid JSON:
+{"skip": false, "front": "question targeting the gap", "back": "concise answer", "tags": ["gap-fill"]}`
+
+      try {
+        const msg = await ai.messages.create({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 400,
+          messages: [{ role: 'user', content: prompt }],
+        })
+        let raw = msg.content[0].text.trim()
+        if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
+        const parsed = JSON.parse(raw)
+
+        if (!parsed.skip && parsed.front) {
+          const suggestion = {
+            id: newId(),
+            front: parsed.front,
+            back: parsed.back || '',
+            tags: [...(parsed.tags || []), 'gap-fill'],
+            sourceCardFront: session.cardFront,
+            sessionId: session.id,
+          }
+          pendingGapCards.push(suggestion)
+          // Send to renderer
+          if (win) win.webContents.send('gap-card-suggestion', suggestion)
+          console.log(`[gap-cards] Suggested: ${parsed.front.slice(0, 60)}...`)
+        } else {
+          // No card generated — mark session as processed
+          await db.markGapCardGenerated([session.id])
+        }
+      } catch (e) {
+        console.error(`[gap-cards] Failed for session ${session.id}:`, e.message)
+        await db.markGapCardGenerated([session.id])
+      }
+    }
+  } catch (e) {
+    console.error('[gap-cards] Error:', e.message)
+  }
+}
+
+// Approve a suggested gap card
+ipcMain.handle('gap-card:approve', async (_, { id }) => {
+  const idx = pendingGapCards.findIndex(c => c.id === id)
+  if (idx === -1) return { ok: false }
+  const suggestion = pendingGapCards.splice(idx, 1)[0]
+
+  await db.insertCard({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  cardState[suggestion.id] = { interval: 1, streak: 0, gotCount: 0, missCount: 0, nextReview: Date.now() }
+  persistCardState(suggestion.id)
+  cards.push({ id: suggestion.id, type: 'qa', front: suggestion.front, back: suggestion.back, tags: suggestion.tags })
+  await db.markGapCardGenerated([suggestion.sessionId])
+  await db.appendGapFeedback({
+    cardFront: suggestion.front, cardBack: suggestion.back,
+    sourceCardFront: suggestion.sourceCardFront, approved: true, ts: Date.now(),
+  })
+
+  // Send next suggestion if queued
+  if (pendingGapCards.length && win) {
+    win.webContents.send('gap-card-suggestion', pendingGapCards[0])
+  }
+
+  return { ok: true }
+})
+
+// Deny a suggested gap card
+ipcMain.handle('gap-card:deny', async (_, { id, reason }) => {
+  const idx = pendingGapCards.findIndex(c => c.id === id)
+  if (idx === -1) return { ok: false }
+  const suggestion = pendingGapCards.splice(idx, 1)[0]
+
+  await db.markGapCardGenerated([suggestion.sessionId])
+  await db.appendGapFeedback({
+    cardFront: suggestion.front, cardBack: suggestion.back,
+    sourceCardFront: suggestion.sourceCardFront, approved: false, reason: reason || null, ts: Date.now(),
+  })
+
+  // Send next suggestion if queued
+  if (pendingGapCards.length && win) {
+    win.webContents.send('gap-card-suggestion', pendingGapCards[0])
+  }
+
+  return { ok: true }
+})
 
 // ── Card embeddings ───────────────────────────────────────────────────────────
-function loadCardEmbeddings() {
-  try { return JSON.parse(fs.readFileSync(CARD_EMBEDDINGS_FILE, 'utf8')) } catch { return { embeddings: {} } }
+async function loadCardEmbeddings() {
+  return db.getCardEmbeddings()
 }
 
-function saveCardEmbeddings(data) {
-  fs.mkdirSync(path.dirname(CARD_EMBEDDINGS_FILE), { recursive: true })
-  fs.writeFileSync(CARD_EMBEDDINGS_FILE, JSON.stringify(data))
+async function saveCardEmbeddings(data) {
+  await db.saveCardEmbeddings(data)
 }
 
 function cosineSim(a, b) {
@@ -402,21 +352,12 @@ function cosineSim(a, b) {
 }
 
 // ── Eval log ──────────────────────────────────────────────────────────────────
-function loadEvalLog() {
-  try { return JSON.parse(fs.readFileSync(EVAL_LOG_FILE, 'utf8')) } catch { return [] }
-}
-
 function appendEvalLog(entry) {
-  const log = loadEvalLog()
-  log.push(entry)
-  try {
-    fs.mkdirSync(path.dirname(EVAL_LOG_FILE), { recursive: true })
-    fs.writeFileSync(EVAL_LOG_FILE, JSON.stringify(log, null, 2))
-  } catch {}
+  db.appendEvalEntry(entry).catch(e => console.error('[db] eval log failed:', e))
 }
 
 // ── Analytics ─────────────────────────────────────────────────────────────────
-function getAnalytics() {
+async function getAnalytics() {
   const now = Date.now()
   const allStates = Object.entries(cardState)
   const totalReviews = allStates.reduce((n, [, s]) => n + (s.gotCount || 0) + (s.missCount || 0), 0)
@@ -445,7 +386,7 @@ function getAnalytics() {
   })).sort((a, b) => b.total - a.total)
 
   let activityData = {}
-  try { activityData = JSON.parse(fs.readFileSync(ACTIVITY_FILE, 'utf8')) } catch {}
+  try { activityData = await db.getActivityLog() } catch {}
   const activityByDay = []
   for (let i = 29; i >= 0; i--) {
     const d   = new Date(now - i * 86400000)
@@ -477,6 +418,8 @@ function getCatalog() {
     return {
       id: card.id, type: card.type, front: card.front, got, miss, accuracy, dueLabel, streak: s?.streak || 0,
       tags: card.tags || [],
+      retired: !!s?.retired,
+      flagged: !!s?.flagged,
     }
   })
 }
@@ -703,9 +646,9 @@ function scheduleNext(overrideMinutes) {
   notifyTimer = setTimeout(fireNotification, ms)
 }
 
-function fireNotification() {
-  cardState = loadState()
-  cards     = loadCards()
+async function fireNotification() {
+  // cardState is in-memory — no reload needed (db is write-through)
+  cards     = await loadCards()
   if (!cards.length) { scheduleNext(); return }
 
   sessionQueue = buildSessionQueue()
@@ -757,7 +700,7 @@ ipcMain.on('snooze', (_, minutes) => {
 
 ipcMain.on('answer', (_, { cardId, correct }) => {
   recordAnswer(cardId, correct)
-  cardState = loadState()
+  // cardState is in-memory — no reload needed (db is write-through)
   sessionDone++
 
   const nextIdx = sessionQueue.findIndex(c => c.id === cardId) + 1
@@ -766,6 +709,10 @@ ipcMain.on('answer', (_, { cardId, correct }) => {
     if (isExpanded) expandCard(currentCard)
     else showPill(currentCard)
   } else {
+    // Session ended — generate gap cards in background (fire-and-forget)
+    const finishedCardIds = sessionQueue.map(c => c.id)
+    generateGapCards(finishedCardIds)
+
     if (notificationSession) {
       hideWindow()
     } else {
@@ -775,9 +722,35 @@ ipcMain.on('answer', (_, { cardId, correct }) => {
   }
 })
 
+// Record AI score without advancing to next card
+ipcMain.handle('answer:record', (_, { cardId, correct }) => {
+  recordAnswer(cardId, correct)
+  // cardState is in-memory — no reload needed (db is write-through)
+  return { ok: true }
+})
+
+// Override a previous score: undo the last record, then re-record with new score
+ipcMain.handle('answer:override', (_, { cardId, wasCorrect, nowCorrect }) => {
+  // Reverse the previous recording
+  const s = cardState[cardId]
+  if (s) {
+    if (wasCorrect) {
+      s.gotCount = Math.max(0, (s.gotCount || 0) - 1)
+    } else {
+      s.missCount = Math.max(0, (s.missCount || 0) - 1)
+    }
+    cardState[cardId] = s
+    persistCardState(cardId)
+  }
+  // Re-record with corrected score
+  recordAnswer(cardId, nowCorrect)
+  // cardState is in-memory — no reload needed (db is write-through)
+  return { ok: true }
+})
+
 ipcMain.on('settings:save', (_, s) => {
   settings = { ...settings, ...s }
-  saveSettings()
+  persistSettings()
   scheduleNext()
   app.setLoginItemSettings({ openAtLogin: !!settings.launchAtLogin, openAsHidden: true })
 })
@@ -789,29 +762,9 @@ ipcMain.handle('catalog:get',  () => getCatalog())
 // ── Knowledge IPC ─────────────────────────────────────────────────────────────
 ipcMain.on('knowledge', () => showKnowledge())
 
-ipcMain.handle('knowledge:get-logs', () => {
-  if (!fs.existsSync(LOGS_DIR)) return []
-  return fs.readdirSync(LOGS_DIR)
-    .filter(f => f.endsWith('.md') && !f.startsWith('_'))
-    .sort((a, b) => b.localeCompare(a))
-    .map(filename => {
-      const content = fs.readFileSync(path.join(LOGS_DIR, filename), 'utf8')
-      const fm = {}
-      const m = content.match(/^---\n([\s\S]*?)\n---/)
-      if (m) {
-        for (const line of m[1].split('\n')) {
-          const i = line.indexOf(': ')
-          if (i > 0) fm[line.slice(0, i).trim()] = line.slice(i + 2).trim()
-        }
-      }
-      return { filename, date: fm.date || '', problem: fm.problem || filename, tags: fm.tags || '' }
-    })
-})
+ipcMain.handle('knowledge:get-logs', () => db.getAllProblemLogs())
 
-ipcMain.handle('knowledge:get-log', (_, { filename }) => {
-  const full = path.join(LOGS_DIR, path.basename(filename))
-  return fs.existsSync(full) ? fs.readFileSync(full, 'utf8') : null
-})
+ipcMain.handle('knowledge:get-log', (_, { filename }) => db.getProblemLog(filename))
 
 ipcMain.handle('knowledge:search', (_, { query }) => {
   return new Promise(resolve => {
@@ -830,7 +783,111 @@ ipcMain.handle('knowledge:search', (_, { query }) => {
   })
 })
 
-ipcMain.handle('knowledge:chroma-status', () => isChromaRunning())
+ipcMain.handle('knowledge:chroma-status', () => isDbReady())
+
+ipcMain.handle('knowledge:related', async (_, { filename }) => {
+  const content = await db.getProblemLog(filename)
+  if (!content) return { ok: false, error: 'Log not found' }
+  const fm = {}
+  const m = content.match(/^---\n([\s\S]*?)\n---/)
+  if (m) {
+    for (const line of m[1].split('\n')) {
+      const i = line.indexOf(': ')
+      if (i > 0) fm[line.slice(0, i).trim()] = line.slice(i + 2).trim()
+    }
+  }
+  const query = fm.problem || content.slice(0, 500)
+
+  return new Promise(resolve => {
+    const cliPath = path.join(KNOWLEDGE_MCP_DIR, 'cli.py')
+    const env = {
+      ...process.env,
+      RESEARCH_DIR: RESEARCH_DIR,
+      OPENAI_API_KEY: settings.openaiApiKey || process.env.OPENAI_API_KEY || '',
+      ANTHROPIC_API_KEY: settings.anthropicApiKey || process.env.ANTHROPIC_API_KEY || '',
+    }
+    const proc = spawn('python3', [cliPath, 'search', '--query', query, '--n', '6'], { env })
+    let out = ''
+    proc.stdout.on('data', d => { out += d })
+    proc.stderr.on('data', d => { out += d })
+    proc.on('close', () => {
+      // Parse results into structured data — each result starts with "### filename"
+      const related = []
+      const blocks = out.split(/^### /m).filter(Boolean)
+      for (const block of blocks) {
+        const lines = block.split('\n')
+        const header = lines[0] || ''
+        const fnameMatch = header.match(/^(\S+\.md)\s+\(similarity\s+(\d+)%\)/)
+        if (!fnameMatch) continue
+        const fn = fnameMatch[1]
+        if (fn === filename) continue // skip self
+        const sim = parseInt(fnameMatch[2], 10)
+        // Extract problem from the log list we already have
+        related.push({ filename: fn, similarity: sim })
+      }
+      resolve({ ok: true, related: related.slice(0, 5) })
+    })
+    proc.on('error', () => resolve({ ok: false, error: 'Search failed' }))
+  })
+})
+
+ipcMain.handle('knowledge:combine', async (_, { filename1, filename2 }) => {
+  const content1 = await db.getProblemLog(filename1)
+  const content2 = await db.getProblemLog(filename2)
+  if (!content1 || !content2) return { ok: false, error: 'Log not found' }
+
+  try {
+    const ai = getAI()
+    const msg = await ai.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 3000,
+      messages: [{
+        role: 'user',
+        content: `Two knowledge logs cover overlapping material. Merge them into one comprehensive log that:
+- Deduplicates repeated information (keep the clearest version)
+- Preserves unique insights from both
+- Maintains the same markdown template structure (frontmatter with date/type/problem/tags, then sections: Problem, Initial Observations, Approach, Key Insights, Solution, Pitfalls, Study Prompts)
+- Use the earlier date in the frontmatter
+- Combine tags from both
+
+FIRST LOG:
+${content1}
+
+SECOND LOG:
+${content2}
+
+Output ONLY the merged markdown — no preamble, no explanation.`,
+      }],
+    })
+
+    const merged = msg.content[0].text.trim()
+
+    // Parse frontmatter from merged content
+    const fm = {}
+    const m = merged.match(/^---\n([\s\S]*?)\n---/)
+    if (m) {
+      for (const line of m[1].split('\n')) {
+        const i = line.indexOf(': ')
+        if (i > 0) fm[line.slice(0, i).trim()] = line.slice(i + 2).trim()
+      }
+    }
+    let tags = []
+    try { tags = JSON.parse(fm.tags || '[]') } catch {}
+
+    // Update first log with merged content
+    await db.upsertProblemLog({
+      filename: filename1, date: fm.date || null, type: fm.type || 'coding',
+      problem: fm.problem || filename1, tags, content: merged,
+    })
+
+    // Mark second log as merged
+    await db.markLogMerged(filename2, filename1)
+
+    return { ok: true, resultFilename: filename1 }
+  } catch (e) {
+    return { ok: false, error: e.message || String(e) }
+  }
+})
 
 // ── Analytics IPC ─────────────────────────────────────────────────────────────
 ipcMain.on('analytics', () => showAnalytics())
@@ -846,7 +903,7 @@ ipcMain.handle('cards:index-embeddings', async () => {
     for (let i = 0; i < cards.length; i++) {
       data.embeddings[cards[i].id] = Array.from(vecs[i])
     }
-    saveCardEmbeddings(data)
+    await saveCardEmbeddings(data)
     return { ok: true, count: cards.length }
   } catch (e) {
     return { ok: false, error: e.message || String(e) }
@@ -856,7 +913,7 @@ ipcMain.handle('cards:index-embeddings', async () => {
 ipcMain.handle('cards:semantic-search', async (_, { query }) => {
   try {
     const key = getOpenAIKey()
-    const embData = loadCardEmbeddings()
+    const embData = await loadCardEmbeddings()
     if (!Object.keys(embData.embeddings || {}).length) {
       return { ok: false, error: 'No embeddings — run Index Cards first' }
     }
@@ -878,42 +935,103 @@ ipcMain.handle('cards:semantic-search', async (_, { query }) => {
   }
 })
 
-ipcMain.handle('cards:set-tags', (_, { cardId, tags }) => {
+ipcMain.handle('cards:set-tags', async (_, { cardId, tags }) => {
   const card = cards.find(c => c.id === cardId)
   if (!card || card.type !== 'qa') return { ok: false }
   const tagsStr = Array.isArray(tags) ? tags.join(' ') : String(tags)
-  const ok = saveQaTagsForRow(cardId, tagsStr)
-  return { ok: !!ok }
+  await saveQaTagsForRow(cardId, tagsStr)
+  return { ok: true }
 })
 
-ipcMain.handle('answer:evaluate', async (_, { cardId, answer }) => {
+// ── Conversation IPC ──────────────────────────────────────────────────────────
+ipcMain.handle('conversation:get-sessions', async (_, { cardId }) => {
+  return db.getCardSessions(cardId)
+})
+
+ipcMain.handle('conversation:get-current', async (_, { cardId }) => {
+  return db.getCurrentSession(cardId)
+})
+
+ipcMain.handle('conversation:start', async (_, { cardId }) => {
+  return db.createSession(cardId)
+})
+
+ipcMain.handle('conversation:clear', async (_, { cardId }) => {
+  await db.deleteCardConversations(cardId)
+  return { ok: true }
+})
+
+ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFollowUp }) => {
   const card = cards.find(c => c.id === cardId)
   if (!card) return { ok: false, error: 'Card not found' }
+
+  // Build context from referenced cards
+  let refContext = ''
+  if (refCardIds?.length) {
+    const refs = refCardIds.map(id => cards.find(c => c.id === id)).filter(Boolean)
+    if (refs.length) {
+      refContext = '\n\nReferenced cards (student mentioned these for context):\n' +
+        refs.map(c => `- Q: ${c.front}\n  A: ${c.back}`).join('\n')
+    }
+  }
+
+  // Ensure a session exists, start one if not
+  let session = await db.getCurrentSession(cardId)
+  if (!session) session = await db.createSession(cardId)
+
+  // Save user message to current session
+  await db.appendMessage(session.id, cardId, 'user', answer)
+
+  const cardContext = `Card question: ${card.front}\n\nCorrect answer: ${card.back}${refContext}`
+
+  // Reload session messages for AI context
+  session = await db.getCurrentSession(cardId)
+  const history = session ? session.messages : []
+  const aiMessages = []
+
+  if (isFollowUp) {
+    aiMessages.push({
+      role: 'user',
+      content: `You are a study assistant helping a student review a flashcard. Be concise (1-3 sentences).\n\n${cardContext}\n\nHere is the conversation so far. Continue naturally.`
+    })
+    aiMessages.push({ role: 'assistant', content: 'Understood. I have the card context.' })
+    for (const m of history) {
+      aiMessages.push({ role: m.role, content: m.content })
+    }
+  } else {
+    aiMessages.push({
+      role: 'user',
+      content: `You are evaluating a flashcard answer. Score it and give brief one-sentence feedback. The student may reference other cards to show connections — reward this if the connections are meaningful.\n\n${cardContext}\n\nStudent's answer: ${answer}\n\nScore: 2 = fully correct, 1 = partially correct (key insight present but incomplete), 0 = incorrect.\n\nReturn ONLY valid JSON: {"score":0|1|2,"feedback":"one sentence feedback"}`
+    })
+  }
+
   try {
     const ai = getAI()
     const msg = await ai.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 300,
-      messages: [{
-        role: 'user',
-        content: `You are evaluating a flashcard answer. Score it and give brief one-sentence feedback.
-
-Card question: ${card.front}
-
-Correct answer: ${card.back}
-
-Student's answer: ${answer}
-
-Score: 2 = fully correct, 1 = partially correct (key insight present but incomplete), 0 = incorrect.
-
-Return ONLY valid JSON: {"score":0|1|2,"feedback":"one sentence feedback"}`,
-      }],
+      messages: aiMessages,
     })
-    let raw = msg.content[0].text.trim()
-    if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
-    const parsed = JSON.parse(raw)
-    appendEvalLog({ cardId, front: card.front, answer, score: parsed.score, feedback: parsed.feedback, ts: Date.now() })
-    return { ok: true, score: parsed.score, feedback: parsed.feedback }
+    const raw = msg.content[0].text.trim()
+
+    if (!isFollowUp) {
+      let cleaned = raw
+      if (cleaned.startsWith('```')) cleaned = cleaned.split('\n').slice(1, -1).join('\n')
+      try {
+        const parsed = JSON.parse(cleaned)
+        const aiContent = `**${['Incorrect', 'Partial', 'Correct'][parsed.score]}** — ${parsed.feedback}`
+        await db.appendMessage(session.id, cardId, 'assistant', aiContent, { score: parsed.score })
+        await db.setSessionScore(session.id, parsed.score)
+        appendEvalLog({ cardId, front: card.front, answer, score: parsed.score, feedback: parsed.feedback, ts: Date.now() })
+        return { ok: true, score: parsed.score, feedback: parsed.feedback }
+      } catch {
+        await db.appendMessage(session.id, cardId, 'assistant', raw)
+        return { ok: true, score: -1, feedback: raw }
+      }
+    } else {
+      await db.appendMessage(session.id, cardId, 'assistant', raw)
+      return { ok: true, score: -1, feedback: raw }
+    }
   } catch (e) {
     return { ok: false, error: e.message || String(e) }
   }
@@ -1029,33 +1147,64 @@ Return ONLY valid JSON: {"tags":["tag0","tag1",...]} with exactly ${k} strings i
 }
 
 async function runAutoTagAll() {
+  const MAX_CLUSTERS = 7
+  const MISC_THRESHOLD = 0.25  // cosine similarity below this = poor fit → misc
+
   const key = getOpenAIKey()
   const qa = cards.filter(c => c.type === 'qa')
   if (qa.length === 0) throw new Error('No Q&A cards to tag')
-  let k = Math.min(settings.categoryClusterK || 8, qa.length)
+  let k = Math.min(MAX_CLUSTERS, qa.length)
   k = Math.max(2, k)
   const texts = qa.map(c => `${c.front}\n${c.back}`.slice(0, 12000))
   const vectors = await openaiEmbeddings(texts, key)
   const assignments = kmeansCosine(vectors, k)
+
+  // Compute centroids to measure fit quality
+  const dim = vectors[0].length
+  const centroids = Array.from({ length: k }, () => new Float32Array(dim))
+  const counts = new Array(k).fill(0)
+  for (let i = 0; i < qa.length; i++) {
+    const c = assignments[i]
+    counts[c]++
+    for (let d = 0; d < dim; d++) centroids[c][d] += vectors[i][d]
+  }
+  for (let c = 0; c < k; c++) {
+    if (counts[c] === 0) continue
+    for (let d = 0; d < dim; d++) centroids[c][d] /= counts[c]
+    let norm = 0
+    for (let d = 0; d < dim; d++) norm += centroids[c][d] * centroids[c][d]
+    norm = Math.sqrt(norm)
+    if (norm > 0) for (let d = 0; d < dim; d++) centroids[c][d] /= norm
+  }
+
+  // Check each card's fit to its cluster — weak fits go to misc
+  const isMisc = new Array(qa.length).fill(false)
+  for (let i = 0; i < qa.length; i++) {
+    const sim = cosineSim(vectors[i], centroids[assignments[i]])
+    if (sim < MISC_THRESHOLD) isMisc[i] = true
+  }
+
+  // Only label non-empty clusters that have well-fitting cards
   const perCluster = Array.from({ length: k }, () => [])
   for (let i = 0; i < qa.length; i++) {
-    perCluster[assignments[i]].push(qa[i].front.slice(0, 200))
+    if (!isMisc[i]) perCluster[assignments[i]].push(qa[i].front.slice(0, 200))
   }
   const samples = perCluster.map((fronts, i) => {
     const uniq = [...new Set(fronts)].slice(0, 6)
     return { cluster: i, samples: uniq.length ? uniq : [`(empty-cluster-${i})`] }
   })
   const tags = await labelClustersWithClaude(k, samples)
+
   for (let i = 0; i < qa.length; i++) {
-    const tag = tags[assignments[i]] || 'misc'
-    saveQaTagsForRow(qa[i].id, tag)
+    const tag = isMisc[i] ? 'misc' : (tags[assignments[i]] || 'misc')
+    await saveQaTagsForRow(qa[i].id, tag)
   }
 }
 
 ipcMain.handle('auto-tag-cards', async () => {
   try {
     await runAutoTagAll()
-    cards = loadCards()
+    cards = await loadCards()
     if (currentView.type === 'catalog') {
       setView('catalog', { catalog: getCatalog(), stats: getStats() })
     }
@@ -1065,21 +1214,202 @@ ipcMain.handle('auto-tag-cards', async () => {
   }
 })
 
-ipcMain.handle('delete-card', (_, { cardId }) => {
-  if (!deleteCardById(cardId)) return { ok: false }
+// ── Undo registry for delete ───────────────────────────────────────────────
+const undoRegistry = {}
+
+ipcMain.handle('delete-card', async (_, { cardId }) => {
+  const card = cards.find(c => c.id === cardId)
+  if (!card) return { ok: false }
+
+  // Stash card data for undo before deleting
+  const stashedState = cardState[cardId] ? { ...cardState[cardId] } : null
+
+  if (!(await deleteCardById(cardId))) return { ok: false }
+
+  // Create undo token
+  const undoToken = newId()
+  undoRegistry[undoToken] = { card: { ...card }, cardState: stashedState }
+  setTimeout(() => { delete undoRegistry[undoToken] }, 10000)
+
+  // Advance session instead of hiding
+  sessionQueue = sessionQueue.filter(c => c.id !== cardId)
   if (currentView.type === 'catalog') {
     setView('catalog', { catalog: getCatalog(), stats: getStats() })
-  } else if (currentView.type === 'card' && currentCard?.id === cardId) {
-    hideWindow()
+  } else if (currentView.type === 'card') {
+    const nextIdx = sessionQueue.findIndex((c, i) => i >= sessionDone)
+    if (nextIdx >= 0) {
+      currentCard = sessionQueue[nextIdx]
+      expandCard(currentCard)
+    } else if (notificationSession) {
+      hideWindow()
+    } else {
+      showCatalog()
+    }
+  }
+  return { ok: true, undoToken }
+})
+
+ipcMain.handle('undo-delete', async (_, { token }) => {
+  const stash = undoRegistry[token]
+  if (!stash) return { ok: false }
+  delete undoRegistry[token]
+
+  // Re-insert card into Postgres
+  await db.insertCard(stash.card)
+  // Restore card state
+  if (stash.cardState) {
+    cardState[stash.card.id] = stash.cardState
+    persistCardState(stash.card.id)
+  }
+  cards = await loadCards()
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
   }
   return { ok: true }
 })
 
-ipcMain.handle('apply-card-edit', (_, { cardId, front, back }) => {
+ipcMain.handle('flag-card', (_, { cardId }) => {
   const card = cards.find(c => c.id === cardId)
   if (!card) return { ok: false }
-  if (!saveCardEdit(card, front, back)) return { ok: false }
-  cards = loadCards()
+  const s = cardState[cardId] || { interval: 1, streak: 0, gotCount: 0, missCount: 0 }
+  s.flagged = true
+  cardState[cardId] = s
+  persistCardState(cardId)
+
+  // Advance session
+  sessionQueue = sessionQueue.filter(c => c.id !== cardId)
+  if (currentView.type === 'card') {
+    const nextIdx = sessionQueue.findIndex((c, i) => i >= sessionDone)
+    if (nextIdx >= 0) {
+      currentCard = sessionQueue[nextIdx]
+      expandCard(currentCard)
+    } else if (notificationSession) {
+      hideWindow()
+    } else {
+      showCatalog()
+    }
+  }
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('unflag-card', (_, { cardId }) => {
+  if (!cardState[cardId]) return { ok: false }
+  delete cardState[cardId].flagged
+  cardState[cardId].streak = 0
+  persistCardState(cardId)
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('unretire-card', (_, { cardId }) => {
+  if (!cardState[cardId]) return { ok: false }
+  delete cardState[cardId].retired
+  cardState[cardId].streak = 0
+  persistCardState(cardId)
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true }
+})
+
+// ── Bulk operations ──────────────────────────────────────────────────────────
+ipcMain.handle('bulk-delete', async (_, { cardIds }) => {
+  let deleted = 0
+  for (const id of cardIds) {
+    if (await deleteCardById(id)) deleted++
+  }
+  cards = await loadCards()
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true, deleted }
+})
+
+ipcMain.handle('bulk-set-tags', async (_, { cardIds, tags }) => {
+  const tagsStr = Array.isArray(tags) ? tags.join(' ') : String(tags)
+  let updated = 0
+  for (const id of cardIds) {
+    if (await saveQaTagsForRow(id, tagsStr)) updated++
+  }
+  cards = await loadCards()
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true, updated }
+})
+
+ipcMain.handle('bulk-flag', (_, { cardIds }) => {
+  for (const id of cardIds) {
+    const s = cardState[id] || { interval: 1, streak: 0, gotCount: 0, missCount: 0 }
+    s.flagged = true
+    cardState[id] = s
+    persistCardState(id)
+  }
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true }
+})
+
+ipcMain.handle('bulk-merge', async (_, { cardIds }) => {
+  const toMerge = cardIds.map(id => cards.find(c => c.id === id)).filter(Boolean)
+  if (toMerge.length < 2) return { ok: false, error: 'Need at least 2 cards' }
+
+  // Delete originals first (before inserting new card)
+  for (const c of toMerge) await deleteCardById(c.id)
+
+  const ai = getAI()
+  const cardsText = toMerge.map((c, i) =>
+    `Card ${i + 1} (${c.type}):\nQ: ${c.front}\nA: ${c.back}${c.tags?.length ? `\nTags: ${c.tags.join(', ')}` : ''}`
+  ).join('\n\n')
+
+  const resp = await ai.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1200,
+    system: `You are a flashcard editor. Merge these flashcards into ONE clear Q&A card.
+
+Rules:
+- "front" = a single concise question (one sentence, no tables, no bullet lists)
+- "back" = a concise answer (plain text, use bullet points with dashes if listing items, NO markdown tables, NO pipe characters)
+- Combine key concepts, remove redundancy
+- Keep it memorizable — short and direct
+
+Output ONLY a JSON code block:
+\`\`\`json
+{"front":"...","back":"...","tags":"space separated tags"}
+\`\`\``,
+    messages: [{ role: 'user', content: `Merge these cards into one:\n\n${cardsText}` }],
+  })
+  const text = resp.content[0].text
+  const m = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (!m) return { ok: false, error: 'AI did not return valid JSON' }
+
+  let parsed
+  try { parsed = JSON.parse(m[1].trim()) } catch { return { ok: false, error: 'Invalid JSON from AI' } }
+  if (!parsed.front || !parsed.back) return { ok: false, error: 'Missing front or back' }
+
+  // Insert new merged card into Postgres
+  const mergedId = newId()
+  const tagsArr = (parsed.tags || toMerge[0].tags?.join(' ') || '').split(' ').filter(Boolean)
+  await db.insertCard({ id: mergedId, type: 'qa', front: parsed.front.trim(), back: parsed.back.trim(), tags: tagsArr })
+
+  cards = await loadCards()
+  if (currentView.type === 'catalog') {
+    setView('catalog', { catalog: getCatalog(), stats: getStats() })
+  }
+  return { ok: true, newCardId: mergedId }
+})
+
+ipcMain.handle('apply-card-edit', async (_, { cardId, front, back }) => {
+  const card = cards.find(c => c.id === cardId)
+  if (!card) return { ok: false }
+  await saveCardEdit(card, front, back)
+  cards = await loadCards()
   const c = cards.find(x => x.id === cardId)
   if (c && currentView.type === 'card') {
     currentCard = c
@@ -1130,10 +1460,24 @@ Help them build deep understanding of the underlying concept. Be conversational,
 })
 
 // ── App lifecycle ─────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
-  settings  = loadSettings()
-  cardState = loadState()
-  cards     = loadCards()
+app.whenReady().then(async () => {
+  // Initialize database
+  await db.initSchema()
+  await db.migrateFromFiles({
+    stateFile: STATE_FILE,
+    settingsFile: SETTINGS_FILE,
+    activityFile: ACTIVITY_FILE,
+    evalLogFile: EVAL_LOG_FILE,
+    conversationsFile: CONVERSATIONS_FILE,
+    embeddingsFile: CARD_EMBEDDINGS_FILE,
+    cardsFile: CARDS_FILE,
+    conceptFile: CONCEPT_FILE,
+    logsDir: LOGS_DIR,
+  })
+
+  settings  = await db.getSettings(DEFAULTS)
+  cardState = await db.getAllCardState()
+  cards     = await loadCards()
 
   const openedAsLoginItem = app.getLoginItemSettings().wasOpenedAtLogin
 
@@ -1146,11 +1490,11 @@ app.whenReady().then(() => {
 
   app.setLoginItemSettings({ openAtLogin: !!settings.launchAtLogin, openAsHidden: true })
   scheduleNext()
-  startChroma()
+  // ChromaDB + Postgres managed by docker-compose (scripts/dev)
 
-  app.on('activate', () => {
-    cardState = loadState()
-    cards     = loadCards()
+  app.on('activate', async () => {
+    // cardState is in-memory — no reload needed (db is write-through)
+    cards     = await loadCards()
     if (!windowAlive()) {
       ensureWindow()
       return
@@ -1172,5 +1516,6 @@ app.whenReady().then(() => {
 app.on('window-all-closed', e => e.preventDefault())
 
 app.on('before-quit', () => {
-  if (chromaProc) { chromaProc.kill(); chromaProc = null }
+  // Docker services cleaned up by scripts/dev trap
+  db.close().catch(() => {})
 })

@@ -33,6 +33,9 @@ export function SettingsPanel({ open, onClose }: Props) {
       <Row label="Cards / session" value={String(settings.cardsPerSession)}>
         <input type="range" min={1} max={10} step={1} value={settings.cardsPerSession} onChange={(e) => setSettings({ ...settings, cardsPerSession: +e.target.value })} className="flex-1 accent-accent cursor-pointer" />
       </Row>
+      <Row label="Retire after" value={`${settings.retireThreshold} correct`}>
+        <input type="range" min={3} max={10} step={1} value={settings.retireThreshold} onChange={(e) => setSettings({ ...settings, retireThreshold: +e.target.value })} className="flex-1 accent-accent cursor-pointer" />
+      </Row>
       <Row label="Annoyance" value={ANNOY_LABELS[settings.annoyanceLevel]}>
         <input type="range" min={0} max={3} step={1} value={settings.annoyanceLevel} onChange={(e) => setSettings({ ...settings, annoyanceLevel: +e.target.value })} className="flex-1 accent-accent cursor-pointer" />
       </Row>
@@ -50,10 +53,6 @@ export function SettingsPanel({ open, onClose }: Props) {
         <input type="password" value={openaiKey} onChange={(e) => setOpenaiKey(e.target.value)} placeholder="sk-..."
           onFocus={(e) => (e.target.type = 'text')} onBlur={(e) => (e.target.type = 'password')} className={inputCls} />
       </div>
-
-      <Row label="Tag clusters" value={String(settings.categoryClusterK)}>
-        <input type="range" min={2} max={16} step={1} value={settings.categoryClusterK} onChange={(e) => setSettings({ ...settings, categoryClusterK: +e.target.value })} className="flex-1 accent-accent cursor-pointer" />
-      </Row>
 
       <button onClick={runAutoTag} disabled={autoTagging}
         className="w-full h-7 border border-border rounded-[var(--radius-md)] bg-transparent text-text-secondary text-[12px] font-medium cursor-pointer hover:bg-surface hover:text-text-primary disabled:opacity-40 transition-colors">
