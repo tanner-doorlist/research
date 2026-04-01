@@ -5,55 +5,41 @@ knowledge-scribe MCP server
 Exposes four tools:
   - log_knowledge        : format, deduplicate, and persist a new problem log
   - search_knowledge     : semantic search over all indexed logs
-  - generate_study_cards : trigger generate_study_cards.py --new-only
+  - generate_study_cards : convert unprocessed logs into flashcards
   - review_pr            : extract engineering knowledge from a PR diff → log + study cards
 
 Deduplication:
   1. Embed incoming notes with OpenAI text-embedding-3-small
-  2. Query ChromaDB for nearest neighbor
+  2. Query Postgres (pgvector) for nearest neighbor
   3. If similarity >= DEDUP_THRESHOLD → Claude merges into existing log
-  4. Otherwise → Claude formats fresh log, writes to problem-logs/, indexes it
+  4. Otherwise → Claude formats fresh log, writes to Postgres with embedding
 """
 
-import asyncio
 import json
 import os
 import re
 import subprocess
+import uuid
 from datetime import datetime
 from pathlib import Path
 
-import chromadb
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
 
+import db as pgdb
+
 # ── Bootstrap ─────────────────────────────────────────────────────────────────
 
 load_dotenv(Path(__file__).parent / ".env")
 
-RESEARCH_DIR     = Path(os.environ.get("RESEARCH_DIR", Path.home() / "research"))
-LOGS_DIR         = RESEARCH_DIR / "problem-logs"
-CARDS_SCRIPT     = RESEARCH_DIR / "generate_study_cards.py"
-CHROMA_HOST      = os.environ.get("CHROMA_HOST", "localhost")
-CHROMA_PORT      = int(os.environ.get("CHROMA_PORT", "8000"))
 DEDUP_THRESHOLD  = float(os.environ.get("DEDUP_THRESHOLD", "0.88"))
 EMBED_MODEL      = "text-embedding-3-small"
 CLAUDE_MODEL     = "claude-sonnet-4-6"
-COLLECTION_NAME  = "knowledge_logs"
-
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 anthropic_client = Anthropic()
 openai_client    = OpenAI()
-chroma           = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-
-def get_collection():
-    return chroma.get_or_create_collection(
-        COLLECTION_NAME,
-        metadata={"hnsw:space": "cosine"},
-    )
 
 mcp = FastMCP("knowledge-scribe")
 
@@ -172,6 +158,14 @@ def extract_problem_line(markdown: str) -> str:
     return "untitled"
 
 
+def _parse_tags(fm: dict) -> list[str]:
+    try:
+        parsed = json.loads(fm.get("tags", "[]"))
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 # ── Tools ─────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
@@ -183,7 +177,7 @@ def log_knowledge(
     """
     Log knowledge gained from working on a ticket.
     Claude formats the notes, checks for duplicates via embedding similarity,
-    merges if overlapping, and persists to problem-logs/.
+    merges if overlapping, and persists to Postgres.
 
     Args:
         ticket_id: Linear ticket ID, e.g. DLE-123
@@ -194,34 +188,31 @@ def log_knowledge(
     embed_input = f"{ticket_id}\n{raw_notes}"
     vec = embed(embed_input)
 
-    # Check for near-duplicate
-    results = get_collection().query(
-        query_embeddings=[vec],
-        n_results=1,
-        include=["documents", "distances", "metadatas"],
-    )
+    # Check for near-duplicate via pgvector
+    nearest = pgdb.nearest_logs(vec, n=1)
 
-    if results["ids"][0]:
-        distance   = results["distances"][0][0]
-        similarity = 1.0 - distance
+    if nearest:
+        similarity = nearest[0]["similarity"]
 
         if similarity >= DEDUP_THRESHOLD:
-            # Merge into existing log
-            existing_meta     = results["metadatas"][0][0]
-            existing_filename = existing_meta.get("filename", "")
-            existing_path     = LOGS_DIR / existing_filename
-
-            existing_content = existing_path.read_text(encoding="utf-8") if existing_path.exists() else ""
-            merged           = merge_with_claude(existing_content, raw_notes)
-
-            existing_path.write_text(merged, encoding="utf-8")
+            existing_row = nearest[0]
+            existing_filename = existing_row["filename"]
+            existing_content = existing_row["content"]
+            merged = merge_with_claude(existing_content, raw_notes)
 
             # Re-embed merged content
             merged_vec = embed(merged[:8000])
-            get_collection().update(
-                ids=[results["ids"][0][0]],
-                embeddings=[merged_vec],
-                documents=[merged[:1000]],
+
+            # Update in Postgres
+            fm = pgdb.parse_frontmatter(merged)
+            pgdb.upsert_log(
+                filename=existing_filename,
+                date=fm.get("date"),
+                log_type=fm.get("type", "coding"),
+                problem=fm.get("problem", existing_filename),
+                tags=_parse_tags(fm),
+                content=merged,
+                embedding=merged_vec,
             )
 
             return (
@@ -234,22 +225,19 @@ def log_knowledge(
     problem_line = extract_problem_line(formatted)
     date_str     = datetime.now().strftime("%Y-%m-%d")
     filename     = f"{date_str}-{ticket_id.lower()}-{slugify(problem_line)}.md"
-    log_path     = LOGS_DIR / filename
 
-    log_path.write_text(formatted, encoding="utf-8")
+    # Parse frontmatter for structured storage
+    fm = pgdb.parse_frontmatter(formatted)
 
-    # Index in ChromaDB
-    doc_id = f"{date_str}-{ticket_id}-{slugify(problem_line)}"
-    get_collection().add(
-        ids=[doc_id],
-        embeddings=[vec],
-        documents=[raw_notes[:1000]],
-        metadatas={
-            "filename":  filename,
-            "ticket_id": ticket_id,
-            "date":      date_str,
-            "tags":      json.dumps(tags),
-        },
+    # Write to Postgres with embedding
+    pgdb.upsert_log(
+        filename=filename,
+        date=date_str,
+        log_type=fm.get("type", "coding"),
+        problem=fm.get("problem", problem_line),
+        tags=tags,
+        content=formatted,
+        embedding=vec,
     )
 
     preview = "\n".join(formatted.splitlines()[:20])
@@ -267,35 +255,20 @@ def search_knowledge(query: str, n_results: int = 3) -> str:
         n_results: Number of results to return (default 3)
     """
     vec     = embed(query)
-    results = get_collection().query(
-        query_embeddings=[vec],
-        n_results=n_results,
-        include=["documents", "metadatas", "distances"],
-    )
+    results = pgdb.nearest_logs(vec, n=n_results)
 
-    if not results["ids"][0]:
+    if not results:
         return "No matching knowledge found."
 
     parts = []
-    for doc_id, meta, distance in zip(
-        results["ids"][0],
-        results["metadatas"][0],
-        results["distances"][0],
-    ):
-        similarity = 1.0 - distance
-        filename   = meta.get("filename", doc_id)
-        log_path   = LOGS_DIR / filename
-
-        if log_path.exists():
-            content = log_path.read_text(encoding="utf-8")
-            # Return Key Insights + Solution sections only (keep it tight)
-            excerpt = _extract_sections(content, ["Key Insights", "Solution", "Pitfalls"])
-        else:
-            excerpt = f"[file not found: {filename}]"
+    for row in results:
+        similarity = row["similarity"]
+        filename   = row["filename"]
+        excerpt    = _extract_sections(row["content"], ["Key Insights", "Solution", "Pitfalls"])
 
         parts.append(
             f"### {filename}  (similarity {similarity:.0%})\n"
-            f"ticket: {meta.get('ticket_id', '?')}  |  date: {meta.get('date', '?')}\n\n"
+            f"date: {row.get('date', '?')}\n\n"
             f"{excerpt}"
         )
 
@@ -305,25 +278,11 @@ def search_knowledge(query: str, n_results: int = 3) -> str:
 @mcp.tool()
 def generate_study_cards() -> str:
     """
-    Trigger generate_study_cards.py --new-only to convert any new problem logs
-    into Anki-compatible Q&A and concept cards.
+    Convert unprocessed problem logs into Q&A and concept flashcards.
+    Reads from Postgres, writes new cards to Postgres.
     """
-    if not CARDS_SCRIPT.exists():
-        return f"Script not found: {CARDS_SCRIPT}"
-
-    result = subprocess.run(
-        [
-            "python3",
-            str(CARDS_SCRIPT),
-            "--new-only",
-            "--logs-dir",   str(LOGS_DIR),
-            "--output-dir", str(RESEARCH_DIR / "study-cards"),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(RESEARCH_DIR),
-    )
-    return (result.stdout + result.stderr).strip() or "Done — no new logs to process."
+    from generate_cards import process_unprocessed_logs
+    return process_unprocessed_logs()
 
 
 # ── Util ──────────────────────────────────────────────────────────────────────
@@ -332,14 +291,12 @@ def _extract_sections(markdown: str, section_names: list[str]) -> str:
     """Pull named ## sections from a markdown log."""
     lines   = markdown.splitlines()
     capture = False
-    current = None
     out     = []
 
     for line in lines:
         if line.startswith("## "):
             heading = line[3:].strip()
             capture = any(heading.startswith(s) for s in section_names)
-            current = heading
         elif capture:
             out.append(line)
 
@@ -403,7 +360,6 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
     """
     cwd = repo_path or str(Path.cwd())
 
-    # Fetch PR metadata and diff
     meta_result = subprocess.run(
         ["gh", "pr", "view", str(pr_number), "--json", "title,body"],
         capture_output=True, text=True, cwd=cwd,
@@ -422,9 +378,8 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
     if diff_result.returncode != 0:
         return f"Could not fetch diff for PR #{pr_number}: {diff_result.stderr.strip()}"
 
-    diff = diff_result.stdout[:12000]  # cap to avoid token overflow
+    diff = diff_result.stdout[:12000]
 
-    # Ask Claude what's worth learning
     prompt = REVIEW_PR_PROMPT.format(
         pr_number=pr_number,
         pr_title=pr_title,
@@ -452,27 +407,20 @@ def review_pr(pr_number: int, repo_path: str | None = None) -> str:
     for item in items:
         slug = item.get("slug", "unknown")
         raw_notes = item.get("raw_notes", "")
-        tags = item.get("tags", []) + ["pr-review", f"pr-{pr_number}"]
+        item_tags = item.get("tags", []) + ["pr-review", f"pr-{pr_number}"]
         ticket_id = f"PR-{pr_number}-{slug}"
 
         if not raw_notes:
             continue
 
-        # Check against existing knowledge before logging
+        # Check for near-duplicate via pgvector
         vec = embed(f"{ticket_id}\n{raw_notes}")
-        results_q = get_collection().query(
-            query_embeddings=[vec],
-            n_results=1,
-            include=["distances"],
-        )
-        if results_q["ids"][0]:
-            similarity = 1.0 - results_q["distances"][0][0]
-            if similarity >= DEDUP_THRESHOLD:
-                results.append(f"  skipped '{slug}' (already covered at {similarity:.0%} similarity)")
-                continue
+        nearest = pgdb.nearest_logs(vec, n=1)
+        if nearest and nearest[0]["similarity"] >= DEDUP_THRESHOLD:
+            results.append(f"  skipped '{slug}' (already covered at {nearest[0]['similarity']:.0%} similarity)")
+            continue
 
-        # Log it
-        outcome = log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=tags)
+        outcome = log_knowledge(ticket_id=ticket_id, raw_notes=raw_notes, tags=item_tags)
         results.append(f"  logged '{slug}': {outcome.splitlines()[0]}")
         logged_count += 1
 

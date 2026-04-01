@@ -18,8 +18,8 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -32,32 +32,20 @@ if _env.exists():
     from dotenv import load_dotenv
     load_dotenv(_env)
 
-import chromadb
 from anthropic import Anthropic
 from openai import OpenAI
 
-RESEARCH_DIR    = Path(os.environ.get("RESEARCH_DIR", Path.home() / "research"))
-LOGS_DIR        = RESEARCH_DIR / "problem-logs"
-CARDS_SCRIPT    = RESEARCH_DIR / "generate_study_cards.py"
-CHROMA_HOST     = os.environ.get("CHROMA_HOST", "localhost")
-CHROMA_PORT     = int(os.environ.get("CHROMA_PORT", "8000"))
+import db as pgdb
+
 DEDUP_THRESHOLD = float(os.environ.get("DEDUP_THRESHOLD", "0.88"))
 EMBED_MODEL     = "text-embedding-3-small"
 CLAUDE_MODEL    = "claude-sonnet-4-6"
-COLLECTION_NAME = "knowledge_logs"
-
-LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 _anthropic  = Anthropic()
 _openai     = OpenAI()
-_chroma     = chromadb.HttpClient(host=CHROMA_HOST, port=CHROMA_PORT)
-_collection = _chroma.get_or_create_collection(
-    COLLECTION_NAME,
-    metadata={"hnsw:space": "cosine"},
-)
 
 
-# ── Core (shared with server.py) ──────────────────────────────────────────────
+# ── Core ─────────────────────────────────────────────────────────────────────
 
 def embed(text: str) -> list[float]:
     resp = _openai.embeddings.create(model=EMBED_MODEL, input=text[:8000])
@@ -182,53 +170,59 @@ def _extract_sections(markdown: str, names: list[str]) -> str:
     return text[:800] if text else markdown[:800]
 
 
+def _parse_tags(fm: dict) -> list[str]:
+    try:
+        parsed = json.loads(fm.get("tags", "[]"))
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def cmd_log(ticket_id: str, raw_notes: str, tags: list[str]) -> str:
-    vec     = embed(f"{ticket_id}\n{raw_notes}")
-    results = _collection.query(
-        query_embeddings=[vec],
-        n_results=1,
-        include=["documents", "distances", "metadatas"],
-    )
+    vec = embed(f"{ticket_id}\n{raw_notes}")
 
-    if results["ids"][0]:
-        distance   = results["distances"][0][0]
-        similarity = 1.0 - distance
+    # Check for near-duplicate via pgvector
+    nearest = pgdb.nearest_logs(vec, n=1)
+
+    if nearest:
+        similarity = nearest[0]["similarity"]
 
         if similarity >= DEDUP_THRESHOLD:
-            meta     = results["metadatas"][0][0]
-            path     = LOGS_DIR / meta.get("filename", "")
-            existing = path.read_text(encoding="utf-8") if path.exists() else ""
-            merged   = _merge(existing, raw_notes)
+            existing = nearest[0]
+            filename = existing["filename"]
 
-            path.write_text(merged, encoding="utf-8")
-            _collection.update(
-                ids=[results["ids"][0][0]],
-                embeddings=[embed(merged[:8000])],
-                documents=[merged[:1000]],
+            merged = _merge(existing["content"], raw_notes)
+            merged_vec = embed(merged[:8000])
+
+            fm = pgdb.parse_frontmatter(merged)
+            pgdb.upsert_log(
+                filename=filename,
+                date=fm.get("date"),
+                log_type=fm.get("type", "coding"),
+                problem=fm.get("problem", filename),
+                tags=_parse_tags(fm),
+                content=merged,
+                embedding=merged_vec,
             )
-            return f"Merged into: {meta.get('filename')}  (similarity {similarity:.0%})"
+            return f"Merged into: {filename}  (similarity {similarity:.0%})"
 
     formatted    = _format(ticket_id, raw_notes, tags)
     problem_line = _extract_problem(formatted)
     date_str     = datetime.now().strftime("%Y-%m-%d")
     filename     = f"{date_str}-{ticket_id.lower()}-{slugify(problem_line)}.md"
-    log_path     = LOGS_DIR / filename
 
-    log_path.write_text(formatted, encoding="utf-8")
+    fm = pgdb.parse_frontmatter(formatted)
 
-    doc_id = f"{date_str}-{ticket_id}-{slugify(problem_line)}"
-    _collection.add(
-        ids=[doc_id],
-        embeddings=[vec],
-        documents=[raw_notes[:1000]],
-        metadatas={
-            "filename":  filename,
-            "ticket_id": ticket_id,
-            "date":      date_str,
-            "tags":      json.dumps(tags),
-        },
+    pgdb.upsert_log(
+        filename=filename,
+        date=date_str,
+        log_type=fm.get("type", "coding"),
+        problem=fm.get("problem", problem_line),
+        tags=tags,
+        content=formatted,
+        embedding=vec,
     )
 
     preview = "\n".join(formatted.splitlines()[:20])
@@ -237,33 +231,19 @@ def cmd_log(ticket_id: str, raw_notes: str, tags: list[str]) -> str:
 
 def cmd_search(query: str, n: int) -> str:
     vec     = embed(query)
-    results = _collection.query(
-        query_embeddings=[vec],
-        n_results=n,
-        include=["documents", "metadatas", "distances"],
-    )
+    results = pgdb.nearest_logs(vec, n=n)
 
-    if not results["ids"][0]:
+    if not results:
         return "No matching knowledge found."
 
     parts = []
-    for doc_id, meta, distance in zip(
-        results["ids"][0], results["metadatas"][0], results["distances"][0]
-    ):
-        similarity = 1.0 - distance
-        filename   = meta.get("filename", doc_id)
-        log_path   = LOGS_DIR / filename
-        excerpt    = (
-            _extract_sections(
-                log_path.read_text(encoding="utf-8"),
-                ["Key Insights", "Solution", "Pitfalls"],
-            )
-            if log_path.exists()
-            else f"[missing: {filename}]"
-        )
+    for row in results:
+        similarity = row["similarity"]
+        filename   = row["filename"]
+        excerpt    = _extract_sections(row["content"], ["Key Insights", "Solution", "Pitfalls"])
         parts.append(
-            f"### {filename}  ({similarity:.0%} match)\n"
-            f"ticket: {meta.get('ticket_id', '?')}  date: {meta.get('date', '?')}\n\n"
+            f"### {filename}  (similarity {similarity:.0%})\n"
+            f"date: {row.get('date', '?')}\n\n"
             f"{excerpt}"
         )
 
@@ -271,20 +251,8 @@ def cmd_search(query: str, n: int) -> str:
 
 
 def cmd_generate() -> str:
-    if not CARDS_SCRIPT.exists():
-        return f"Script not found: {CARDS_SCRIPT}"
-    result = subprocess.run(
-        [
-            "python3", str(CARDS_SCRIPT),
-            "--new-only",
-            "--logs-dir",   str(LOGS_DIR),
-            "--output-dir", str(RESEARCH_DIR / "study-cards"),
-        ],
-        capture_output=True,
-        text=True,
-        cwd=str(RESEARCH_DIR),
-    )
-    return (result.stdout + result.stderr).strip() or "Done — no new logs."
+    from generate_cards import process_unprocessed_logs
+    return process_unprocessed_logs()
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

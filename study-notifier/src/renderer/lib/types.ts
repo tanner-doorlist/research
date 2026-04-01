@@ -30,6 +30,8 @@ export interface CatalogItem {
   dueLabel: string
   streak: number
   tags: string[]
+  retired: boolean
+  flagged: boolean
 }
 
 export interface Settings {
@@ -37,7 +39,7 @@ export interface Settings {
   annoyanceLevel: number
   cardsPerSession: number
   launchAtLogin: boolean
-  categoryClusterK: number
+  retireThreshold: number
   anthropicApiKey?: string
   openaiApiKey?: string
 }
@@ -81,6 +83,20 @@ export interface ViewState {
   analytics?: AnalyticsData
 }
 
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+  ts: number
+  score?: number
+}
+
+export interface ConversationSession {
+  id: string
+  startedAt: number
+  score: number | null
+  messages: ConversationMessage[]
+}
+
 export interface ElectronAPI {
   expand: () => void
   dismiss: () => void
@@ -102,11 +118,25 @@ export interface ElectronAPI {
   applyCardEdit: (cardId: string, front: string, back: string) => Promise<{ ok: boolean }>
   chatSend: (messages: { role: string; content: string }[], card: Card) => Promise<string>
   autoTagCards: () => Promise<{ ok: boolean; error?: string }>
-  deleteCard: (cardId: string) => Promise<{ ok: boolean }>
+  deleteCard: (cardId: string) => Promise<{ ok: boolean; undoToken?: string }>
+  undoDelete: (token: string) => Promise<{ ok: boolean }>
+  flagCard: (cardId: string) => Promise<{ ok: boolean }>
+  unflagCard: (cardId: string) => Promise<{ ok: boolean }>
+  unretireCard: (cardId: string) => Promise<{ ok: boolean }>
   indexCards: () => Promise<{ ok: boolean; count?: number; error?: string }>
   semanticSearchCards: (query: string) => Promise<{ ok: boolean; orderedIds?: string[]; error?: string }>
   setCardTags: (cardId: string, tags: string[]) => Promise<{ ok: boolean }>
-  evaluateAnswer: (cardId: string, answer: string) => Promise<{ ok: boolean; score?: number; feedback?: string; error?: string }>
+  bulkDelete: (cardIds: string[]) => Promise<{ ok: boolean; deleted?: number }>
+  bulkSetTags: (cardIds: string[], tags: string[]) => Promise<{ ok: boolean; updated?: number }>
+  bulkFlag: (cardIds: string[]) => Promise<{ ok: boolean }>
+  bulkMerge: (cardIds: string[]) => Promise<{ ok: boolean; newCardId?: string; error?: string }>
+  evaluateAnswer: (cardId: string, answer: string, refCardIds?: string[], isFollowUp?: boolean) => Promise<{ ok: boolean; score?: number; feedback?: string; error?: string }>
+  recordAnswer: (cardId: string, correct: boolean) => Promise<{ ok: boolean }>
+  overrideAnswer: (cardId: string, wasCorrect: boolean, nowCorrect: boolean) => Promise<{ ok: boolean }>
+  getSessions: (cardId: string) => Promise<ConversationSession[]>
+  getCurrentSession: (cardId: string) => Promise<ConversationSession | null>
+  startSession: (cardId: string) => Promise<ConversationSession>
+  clearConversation: (cardId: string) => Promise<{ ok: boolean }>
 
   getView: () => Promise<ViewState>
   onView: (cb: (v: ViewState) => void) => void
@@ -118,6 +148,8 @@ export interface ElectronAPI {
   getKnowledgeLog: (filename: string) => Promise<string | null>
   searchKnowledge: (query: string) => Promise<string>
   getChromaStatus: () => Promise<boolean>
+  getRelatedLogs: (filename: string) => Promise<{ ok: boolean; related?: { filename: string; similarity: number }[]; error?: string }>
+  combineLogs: (filename1: string, filename2: string) => Promise<{ ok: boolean; resultFilename?: string; error?: string }>
 
   getAnalytics: () => Promise<AnalyticsData>
 }
