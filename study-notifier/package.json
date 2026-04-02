@@ -9,6 +9,7 @@
     "start": "vite build && electron .",
     "build:renderer": "vite build",
     "build": "vite build && rm -rf dist && electron-builder --mac --dir && rm -rf ~/Applications/Study\\ Notifier.app && cp -R dist/mac-arm64/Study\\ Notifier.app ~/Applications/",
+    "build:dmg": "vite build && rm -rf dist && electron-builder --mac",
     "test": "vitest run",
     "test:watch": "vitest",
     "setup": "bash setup.sh"
@@ -35,6 +36,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "concurrently": "^9.2.1",
+    "@electron/notarize": "^2.5.0",
     "electron": "^31.0.0",
     "electron-builder": "^25.0.0",
     "lucide-react": "^1.7.0",
@@ -48,17 +50,35 @@
   "build": {
     "appId": "app.doorlist.study-notifier",
     "productName": "Study Notifier",
+    "afterSign": "scripts/notarize.js",
     "mac": {
       "category": "public.app-category.education",
       "icon": "build/icons/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
       "target": [
         {
-          "target": "dir",
+          "target": "dmg",
           "arch": [
             "arm64",
             "x64"
           ]
+        },
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
         }
+      ]
+    },
+    "dmg": {
+      "sign": false,
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
       ]
     },
     "directories": {
