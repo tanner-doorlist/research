@@ -42,9 +42,3 @@ variable "team_token" {
   sensitive   = true
 }
 
-variable "github_token" {
-  description = "GitHub token for PR review tool"
-  type        = string
-  sensitive   = true
-  default     = ""
-}

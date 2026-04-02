@@ -1,5 +1,5 @@
 import { getAnthropic } from '../ai.js'
-import { CLAUDE_MODEL, DEDUP_THRESHOLD, GITHUB_TOKEN } from '../config.js'
+import { CLAUDE_MODEL, DEDUP_THRESHOLD } from '../config.js'
 import { embed } from '../core.js'
 import { nearestLogs } from '../db.js'
 import { logKnowledge } from './log-knowledge.js'
@@ -43,19 +43,19 @@ Return JSON only — no preamble:
 
 If there is genuinely nothing worth logging, return {{"items": []}}`
 
-async function fetchGithub(path: string): Promise<Response> {
+async function fetchGithub(path: string, token: string): Promise<Response> {
   return fetch(`https://api.github.com${path}`, {
     headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3+json',
     },
   })
 }
 
-async function fetchDiff(owner: string, repo: string, prNumber: number): Promise<string> {
+async function fetchDiff(owner: string, repo: string, prNumber: number, token: string): Promise<string> {
   const resp = await fetch(`https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`, {
     headers: {
-      Authorization: `Bearer ${GITHUB_TOKEN}`,
+      Authorization: `Bearer ${token}`,
       Accept: 'application/vnd.github.v3.diff',
     },
   })
@@ -63,9 +63,9 @@ async function fetchDiff(owner: string, repo: string, prNumber: number): Promise
   return resp.text()
 }
 
-export async function reviewPr(prNumber: number, owner: string, repo: string): Promise<string> {
+export async function reviewPr(prNumber: number, owner: string, repo: string, githubToken: string): Promise<string> {
   // Fetch PR metadata
-  const metaResp = await fetchGithub(`/repos/${owner}/${repo}/pulls/${prNumber}`)
+  const metaResp = await fetchGithub(`/repos/${owner}/${repo}/pulls/${prNumber}`, githubToken)
   if (!metaResp.ok) {
     return `Could not fetch PR #${prNumber}: ${metaResp.status} ${metaResp.statusText}`
   }
@@ -74,7 +74,7 @@ export async function reviewPr(prNumber: number, owner: string, repo: string): P
   const prDescription = (meta.body || '').slice(0, 2000)
 
   // Fetch diff
-  const diff = (await fetchDiff(owner, repo, prNumber)).slice(0, 12000)
+  const diff = (await fetchDiff(owner, repo, prNumber, githubToken)).slice(0, 12000)
 
   // Ask Claude to extract knowledge items
   const prompt = REVIEW_PR_PROMPT
