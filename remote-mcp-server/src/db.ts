@@ -520,6 +520,18 @@ export async function saveCardEmbeddings(data: {
   }
 }
 
+export async function upsertCardEmbedding(
+  cardId: string, model: string, embedding: number[], indexedAt: number,
+) {
+  await pool.query(
+    `INSERT INTO card_embeddings (card_id, model, embedding, indexed_at)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (card_id) DO UPDATE SET
+       model = EXCLUDED.model, embedding = EXCLUDED.embedding, indexed_at = EXCLUDED.indexed_at`,
+    [cardId, model, embedding, indexedAt],
+  )
+}
+
 // ── Problem Logs CRUD ───────────────────────────────────────────────────────
 
 export async function getAllProblemLogs() {

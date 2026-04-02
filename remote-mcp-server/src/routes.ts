@@ -5,6 +5,7 @@ import { logKnowledge } from './tools/log-knowledge.js'
 import { searchKnowledge } from './tools/search-knowledge.js'
 import { generateStudyCards } from './tools/generate-cards.js'
 import { reviewPr } from './tools/review-pr.js'
+import { indexAllCardEmbeddings, semanticSearch, autoTagAllCards, afterCardWrite } from './compute.js'
 import * as db from './db.js'
 
 export const api = new Hono()
@@ -37,6 +38,10 @@ api.post('/search', async (c) => {
 
 api.post('/generate-cards', async (c) => {
   const result = await generateStudyCards()
+  // Auto-embed any newly created cards (non-blocking)
+  Promise.resolve().then(() => indexAllCardEmbeddings().catch(e =>
+    console.error('[compute] post-generate indexing failed:', e),
+  ))
   return c.json({ result })
 })
 
@@ -89,12 +94,23 @@ api.post('/cards', async (c) => {
     card.tags || [], card.when || '', card.how || '', card.example || '',
     card.repo || null,
   )
+  Promise.resolve().then(() => afterCardWrite(card.id, card.front, card.back || ''))
   return c.json({ ok: true })
 })
 
 api.patch('/cards/:id', async (c) => {
   const fields = await c.req.json()
   await db.updateCard(c.req.param('id'), fields)
+  if (fields.front !== undefined || fields.back !== undefined) {
+    const cardId = c.req.param('id')
+    const cards = await db.getAllCards()
+    const card = cards.find((c: { id: string }) => c.id === cardId)
+    if (card) {
+      const front = (fields.front as string) ?? (card as { front: string }).front
+      const back = (fields.back as string) ?? (card as { back: string }).back
+      Promise.resolve().then(() => afterCardWrite(cardId, front, back))
+    }
+  }
   return c.json({ ok: true })
 })
 
@@ -215,6 +231,25 @@ api.post('/eval-log', async (c) => {
   const entry = await c.req.json()
   await db.appendEvalEntry(entry)
   return c.json({ ok: true })
+})
+
+// ── Server-side compute ─────────────────────────────────────────────────────
+
+api.post('/cards/index-embeddings', async (c) => {
+  const result = await indexAllCardEmbeddings()
+  return c.json(result)
+})
+
+api.post('/cards/semantic-search', async (c) => {
+  const { query } = await c.req.json()
+  if (!query) return c.json({ error: 'query required' }, 400)
+  const result = await semanticSearch(query)
+  return c.json(result)
+})
+
+api.post('/cards/auto-tag', async (c) => {
+  const result = await autoTagAllCards()
+  return c.json(result)
 })
 
 // ── Embeddings ──────────────────────────────────────────────────────────────

@@ -13,15 +13,6 @@ function newId() {
   return crypto.randomUUID()
 }
 
-// ── Utilities ────────────────────────────────────────────────────────────────
-function normalizeVector(v) {
-  let norm = 0
-  for (let i = 0; i < v.length; i++) norm += v[i] * v[i]
-  norm = Math.sqrt(norm)
-  if (norm > 0) for (let i = 0; i < v.length; i++) v[i] /= norm
-  return v
-}
-
 // ── Paths ─────────────────────────────────────────────────────────────────────
 // All data is now stored on the remote server — no local file paths needed
 
@@ -430,22 +421,6 @@ ipcMain.handle('gap-card:deny', async (_, { id, reason }) => {
   return { ok: true }
 })
 
-// ── Card embeddings ───────────────────────────────────────────────────────────
-async function loadCardEmbeddings() {
-  return serverGet('/api/card-embeddings')
-}
-
-async function saveCardEmbeddings(data) {
-  await serverFetch('/api/card-embeddings', data, 'PUT')
-}
-
-function cosineSim(a, b) {
-  // assumes pre-normalized unit vectors
-  let dot = 0
-  const len = Math.min(a.length, b.length)
-  for (let i = 0; i < len; i++) dot += a[i] * b[i]
-  return dot
-}
 
 // ── Eval log ──────────────────────────────────────────────────────────────────
 function appendEvalLog(entry) {
@@ -1197,18 +1172,10 @@ Output ONLY the merged markdown — no preamble, no explanation.`,
 ipcMain.on('analytics', () => showAnalytics())
 ipcMain.handle('analytics:get', () => getAnalytics())
 
-// ── Card embeddings IPC ───────────────────────────────────────────────────────
+// ── Card embeddings IPC (server-side compute) ────────────────────────────────
 ipcMain.handle('cards:index-embeddings', async () => {
   try {
-    const key = null
-    const texts = cards.map(c => `${c.front}\n${c.back}`.slice(0, 8000))
-    const vecs = await openaiEmbeddings(texts, key)
-    const data = { model: 'text-embedding-3-small', indexed_at: Date.now(), embeddings: {} }
-    for (let i = 0; i < cards.length; i++) {
-      data.embeddings[cards[i].id] = Array.from(vecs[i])
-    }
-    await saveCardEmbeddings(data)
-    return { ok: true, count: cards.length }
+    return await serverFetch('/api/cards/index-embeddings', {})
   } catch (e) {
     return { ok: false, error: e.message || String(e) }
   }
@@ -1216,21 +1183,7 @@ ipcMain.handle('cards:index-embeddings', async () => {
 
 ipcMain.handle('cards:semantic-search', async (_, { query }) => {
   try {
-    const key = null
-    const embData = await loadCardEmbeddings()
-    if (!Object.keys(embData.embeddings || {}).length) {
-      return { ok: false, error: 'No embeddings — run Index Cards first' }
-    }
-    const vecs = await openaiEmbeddings([query], key)
-    const qv = vecs[0]
-    const scores = []
-    for (const [cardId, emb] of Object.entries(embData.embeddings)) {
-      const v = new Float32Array(emb)
-      normalizeVector(v)
-      scores.push({ cardId, score: cosineSim(qv, v) })
-    }
-    scores.sort((a, b) => b.score - a.score)
-    return { ok: true, orderedIds: scores.map(s => s.cardId) }
+    return await serverFetch('/api/cards/semantic-search', { query })
   } catch (e) {
     return { ok: false, error: e.message || String(e) }
   }
@@ -1338,169 +1291,10 @@ ipcMain.handle('answer:evaluate', async (_, { cardId, answer, refCardIds, isFoll
   }
 })
 
-// ── Embeddings (proxied through remote server or local OpenAI) ───────────────
-async function openaiEmbeddings(texts, _key) {
-  // Try remote server first, fall back to direct OpenAI
-  const key = _key || settings.openaiApiKey || process.env.OPENAI_API_KEY
-  const serverUrl = getServerUrl()
-
-  const out = []
-  for (let i = 0; i < texts.length; i += 64) {
-    const chunk = texts.slice(i, i + 64)
-    let embeddings
-
-    if (serverUrl) {
-      const resp = await serverFetch('/api/embed', { texts: chunk })
-      embeddings = resp.embeddings
-    } else if (key) {
-      const res = await fetch('https://api.openai.com/v1/embeddings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
-        body: JSON.stringify({ model: 'text-embedding-3-small', input: chunk }),
-      })
-      if (!res.ok) throw new Error(`OpenAI embeddings: ${await res.text()}`)
-      const j = await res.json()
-      embeddings = j.data.sort((a, b) => a.index - b.index).map(d => d.embedding)
-    } else {
-      throw new Error('No server URL or OpenAI key configured')
-    }
-
-    for (const e of embeddings) {
-      const v = new Float32Array(e.length)
-      for (let d = 0; d < e.length; d++) v[d] = e[d]
-      normalizeVector(v)
-      out.push(v)
-    }
-  }
-  return out
-}
-
-function kmeansCosine(points, k, maxIter = 40) {
-  const n = points.length
-  const dim = points[0].length
-  if (n === 0) return []
-  if (k <= 1 || n <= k) return new Array(n).fill(0)
-
-  const centroids = []
-  const picked = new Set()
-  while (centroids.length < k && picked.size < n) {
-    const j = Math.floor(Math.random() * n)
-    if (picked.has(j)) continue
-    picked.add(j)
-    centroids.push(Float32Array.from(points[j]))
-  }
-  const assignments = new Array(n).fill(0)
-
-  function assignStep() {
-    for (let i = 0; i < n; i++) {
-      let best = 0
-      let bestDot = -Infinity
-      for (let c = 0; c < k; c++) {
-        let dot = 0
-        for (let d = 0; d < dim; d++) dot += points[i][d] * centroids[c][d]
-        if (dot > bestDot) {
-          bestDot = dot
-          best = c
-        }
-      }
-      assignments[i] = best
-    }
-  }
-
-  for (let iter = 0; iter < maxIter; iter++) {
-    assignStep()
-    const counts = new Array(k).fill(0)
-    const sums = centroids.map(() => new Float32Array(dim))
-    for (let i = 0; i < n; i++) {
-      const c = assignments[i]
-      counts[c]++
-      for (let d = 0; d < dim; d++) sums[c][d] += points[i][d]
-    }
-    for (let c = 0; c < k; c++) {
-      if (counts[c] === 0) continue
-      for (let d = 0; d < dim; d++) centroids[c][d] = sums[c][d] / counts[c]
-      normalizeVector(centroids[c])
-    }
-  }
-  return assignments
-}
-
-async function labelClustersWithClaude(k, samples) {
-  const ai = getAI()
-  const msg = await ai.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 1200,
-    messages: [{
-      role: 'user',
-      content: `Each cluster has sample flashcard fronts. Assign ONE short category tag per cluster: lowercase, a-z 0-9 hyphen only, max 24 characters, no spaces.
-
-${JSON.stringify(samples, null, 2)}
-
-Return ONLY valid JSON: {"tags":["tag0","tag1",...]} with exactly ${k} strings in cluster order 0..${k - 1}.`,
-    }],
-  })
-  let raw = msg.content[0].text.trim()
-  if (raw.startsWith('```')) raw = raw.split('\n').slice(1, -1).join('\n')
-  const parsed = JSON.parse(raw)
-  if (!parsed.tags || parsed.tags.length !== k) throw new Error('Unexpected tags from model')
-  return parsed.tags
-}
-
-async function runAutoTagAll() {
-  const MAX_CLUSTERS = 7
-  const MISC_THRESHOLD = 0.25  // cosine similarity below this = poor fit → misc
-
-  const key = null
-  const qa = cards.filter(c => c.type === 'qa')
-  if (qa.length === 0) throw new Error('No Q&A cards to tag')
-  let k = Math.min(MAX_CLUSTERS, qa.length)
-  k = Math.max(2, k)
-  const texts = qa.map(c => `${c.front}\n${c.back}`.slice(0, 12000))
-  const vectors = await openaiEmbeddings(texts, key)
-  const assignments = kmeansCosine(vectors, k)
-
-  // Compute centroids to measure fit quality
-  const dim = vectors[0].length
-  const centroids = Array.from({ length: k }, () => new Float32Array(dim))
-  const counts = new Array(k).fill(0)
-  for (let i = 0; i < qa.length; i++) {
-    const c = assignments[i]
-    counts[c]++
-    for (let d = 0; d < dim; d++) centroids[c][d] += vectors[i][d]
-  }
-  for (let c = 0; c < k; c++) {
-    if (counts[c] === 0) continue
-    for (let d = 0; d < dim; d++) centroids[c][d] /= counts[c]
-    normalizeVector(centroids[c])
-  }
-
-  // Check each card's fit to its cluster — weak fits go to misc
-  const isMisc = new Array(qa.length).fill(false)
-  for (let i = 0; i < qa.length; i++) {
-    const sim = cosineSim(vectors[i], centroids[assignments[i]])
-    if (sim < MISC_THRESHOLD) isMisc[i] = true
-  }
-
-  // Only label non-empty clusters that have well-fitting cards
-  const perCluster = Array.from({ length: k }, () => [])
-  for (let i = 0; i < qa.length; i++) {
-    if (!isMisc[i]) perCluster[assignments[i]].push(qa[i].front.slice(0, 200))
-  }
-  const samples = perCluster.map((fronts, i) => {
-    const uniq = [...new Set(fronts)].slice(0, 6)
-    return { cluster: i, samples: uniq.length ? uniq : [`(empty-cluster-${i})`] }
-  })
-  const tags = await labelClustersWithClaude(k, samples)
-
-  for (let i = 0; i < qa.length; i++) {
-    const tag = isMisc[i] ? 'misc' : (tags[assignments[i]] || 'misc')
-    await saveQaTagsForRow(qa[i].id, tag)
-  }
-}
 
 ipcMain.handle('auto-tag-cards', async () => {
   try {
-    await runAutoTagAll()
+    await serverFetch('/api/cards/auto-tag', {})
     cards = await loadCards()
     refreshCatalogView()
     return { ok: true }
