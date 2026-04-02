@@ -1,71 +1,61 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useMemo } from 'react'
 import type { KnowledgeLog } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { Spinner } from '../components/spinner'
 import { Search, ArrowLeft, Merge, FolderOpen } from 'lucide-react'
+import {
+  useKnowledgeLogs, useChromaStatus, useRepos, useKnowledgeLog,
+  useRelatedLogs, useCombineLogs, useSearchKnowledge, queryKeys,
+} from '../hooks/use-api'
+import { useQueryClient } from '@tanstack/react-query'
 
 type Sub = 'list' | 'detail' | 'results'
-type RelatedLog = { filename: string; similarity: number }
 
 export function KnowledgeView() {
   const [sub, setSub] = useState<Sub>('list')
-  const [logs, setLogs] = useState<KnowledgeLog[]>([])
-  const [dbOnline, setDbOnline] = useState<boolean | null>(null)
-  const [repos, setRepos] = useState<string[]>([])
+  const { data: logs = [] } = useKnowledgeLogs()
+  const { data: dbOnline = null } = useChromaStatus()
+  const { data: repos = [] } = useRepos()
   const [activeRepo, setActiveRepo] = useState<string | null>(null)
-  const [detail, setDetail] = useState('')
   const [detailFilename, setDetailFilename] = useState('')
-  const [related, setRelated] = useState<RelatedLog[]>([])
-  const [loadingRelated, setLoadingRelated] = useState(false)
-  const [combining, setCombining] = useState(false)
   const [query, setQuery] = useState('')
   const [results, setResults] = useState('')
-  const [searching, setSearching] = useState(false)
 
-  useEffect(() => {
-    window.api.getKnowledgeLogs().then(setLogs)
-    window.api.getChromaStatus().then(setDbOnline)
-    window.api.getRepos().then(setRepos)
-  }, [])
+  const qc = useQueryClient()
+  const { data: detail = '' } = useKnowledgeLog(detailFilename, sub === 'detail' && !!detailFilename)
+  const { data: relatedData, isLoading: loadingRelated } = useRelatedLogs(detailFilename, sub === 'detail' && !!detailFilename)
+  const related = relatedData?.ok ? (relatedData.related ?? []) : []
+
+  const combineMutation = useCombineLogs()
+  const searchMutation = useSearchKnowledge()
 
   const filteredLogs = useMemo(() => {
     if (!activeRepo) return logs
     return logs.filter(l => l.repo === activeRepo)
   }, [logs, activeRepo])
 
-  const openLog = async (f: string) => {
-    const c = await window.api.getKnowledgeLog(f)
-    if (c) {
-      setDetail(c); setDetailFilename(f); setSub('detail')
-      setRelated([]); setLoadingRelated(true)
-      window.api.getRelatedLogs(f).then(r => {
-        if (r.ok && r.related) setRelated(r.related)
-        setLoadingRelated(false)
-      })
-    }
+  const openLog = (f: string) => {
+    setDetailFilename(f)
+    setSub('detail')
+    // Invalidate to force fresh fetch for related logs
+    qc.invalidateQueries({ queryKey: queryKeys.relatedLogs(f) })
   }
 
   const combineWith = async (otherFilename: string) => {
-    setCombining(true)
-    const r = await window.api.combineLogs(detailFilename, otherFilename)
+    const r = await combineMutation.mutateAsync({ filename1: detailFilename, filename2: otherFilename })
     if (r.ok && r.resultFilename) {
-      // Refresh logs and reopen merged result
-      const newLogs = await window.api.getKnowledgeLogs()
-      setLogs(newLogs)
-      const c = await window.api.getKnowledgeLog(r.resultFilename)
-      if (c) {
-        setDetail(c); setDetailFilename(r.resultFilename)
-        setRelated([]); setLoadingRelated(true)
-        window.api.getRelatedLogs(r.resultFilename).then(res => {
-          if (res.ok && res.related) setRelated(res.related)
-          setLoadingRelated(false)
-        })
-      }
+      setDetailFilename(r.resultFilename)
+      qc.invalidateQueries({ queryKey: queryKeys.relatedLogs(r.resultFilename) })
+      qc.invalidateQueries({ queryKey: queryKeys.knowledgeLog(r.resultFilename) })
     }
-    setCombining(false)
   }
 
-  const doSearch = async () => { const q = query.trim(); if (!q) return; setSub('results'); setSearching(true); setResults(await window.api.searchKnowledge(q)); setSearching(false) }
+  const doSearch = async () => {
+    const q = query.trim(); if (!q) return
+    setSub('results')
+    const r = await searchMutation.mutateAsync(q)
+    setResults(r)
+  }
   const tags = (s: string) => s.replace(/[\[\]"]/g, '').split(',').map((t) => t.trim()).filter(Boolean).join(', ')
   const logTitle = (filename: string) => logs.find(l => l.filename === filename)?.problem || filename
 
@@ -117,7 +107,7 @@ export function KnowledgeView() {
 
       {sub === 'detail' && (
         <div className="flex-1 overflow-y-auto px-[var(--spacing-x)] py-3 flex flex-col gap-2">
-          <button onClick={() => { setSub('list'); setRelated([]) }} className="bg-transparent border-none text-text-tertiary text-[11px] cursor-pointer text-left p-0 flex items-center gap-1 hover:text-text-secondary">
+          <button onClick={() => { setSub('list'); setDetailFilename('') }} className="bg-transparent border-none text-text-tertiary text-[11px] cursor-pointer text-left p-0 flex items-center gap-1 hover:text-text-secondary">
             <ArrowLeft size={11} /> Back
           </button>
           <div className="text-[12px] leading-[1.7]"><MarkdownRender content={detail} /></div>
@@ -126,8 +116,8 @@ export function KnowledgeView() {
           <div className="mt-2 pt-2 border-t border-border">
             <span className="text-[11px] font-semibold text-text-secondary">Related notes</span>
             {loadingRelated && <div className="flex items-center gap-2 py-2 text-[11px] text-text-tertiary"><Spinner /> Finding related...</div>}
-            {combining && <div className="flex items-center gap-2 py-2 text-[11px] text-accent"><Spinner /> Combining notes...</div>}
-            {!loadingRelated && related.length === 0 && !combining && (
+            {combineMutation.isPending && <div className="flex items-center gap-2 py-2 text-[11px] text-accent"><Spinner /> Combining notes...</div>}
+            {!loadingRelated && related.length === 0 && !combineMutation.isPending && (
               <div className="py-2 text-[11px] text-text-tertiary">No related notes found.</div>
             )}
             {related.map(r => (
@@ -137,7 +127,7 @@ export function KnowledgeView() {
                   {logTitle(r.filename)}
                 </button>
                 <span className="text-[10px] text-text-tertiary shrink-0">{r.similarity}%</span>
-                <button onClick={() => combineWith(r.filename)} disabled={combining}
+                <button onClick={() => combineWith(r.filename)} disabled={combineMutation.isPending}
                   title="Combine into this note"
                   className="w-6 h-6 border-none rounded-[var(--radius-md)] bg-transparent text-text-tertiary cursor-pointer flex items-center justify-center hover:bg-surface hover:text-accent transition-colors disabled:opacity-40 shrink-0">
                   <Merge size={12} />
@@ -157,7 +147,7 @@ export function KnowledgeView() {
             <span className="text-[11px] text-text-tertiary truncate">"{query}"</span>
           </div>
           <div className="flex-1 overflow-y-auto px-[var(--spacing-x)] py-3 text-[12px] leading-[1.7] whitespace-pre-wrap text-text-secondary">
-            {searching ? <div className="flex items-center gap-2 text-text-tertiary py-4"><Spinner /> Searching...</div> : results}
+            {searchMutation.isPending ? <div className="flex items-center gap-2 text-text-tertiary py-4"><Spinner /> Searching...</div> : results}
           </div>
         </div>
       )}

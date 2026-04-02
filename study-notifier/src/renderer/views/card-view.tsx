@@ -1,9 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { Card, Stats, CatalogItem, ConversationMessage, ConversationSession } from '../lib/types'
+import type { Card, Stats, ConversationMessage, ConversationSession } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { CardTags } from '../components/card-tags'
 import { Spinner } from '../components/spinner'
 import { Menu, Settings, Pencil, BookOpen, BarChart3, FileText, Trash2, X, MessageCircle, Flag, ArrowLeft } from 'lucide-react'
+import {
+  useCatalog, useSessions, useCurrentSession,
+  useDeleteCard, useFlagCard, useEvaluateAnswer, useRecordAnswer,
+  useOverrideAnswer, useClearConversation, useEditCardChat, useApplyCardEdit,
+  useUndoDelete,
+} from '../hooks/use-api'
 import {
   parseMentions, getActiveMention, getActiveSlash,
   filterMentionCandidates, filterCommands, insertMention, insertCommand,
@@ -21,6 +27,14 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
   const [editOpen, setEditOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [undoToast, setUndoToast] = useState<{ token: string; timer: ReturnType<typeof setTimeout> } | null>(null)
+
+  // Mutations
+  const deleteCardMut = useDeleteCard()
+  const flagCardMut = useFlagCard()
+  const evaluateAnswerMut = useEvaluateAnswer()
+  const recordAnswerMut = useRecordAnswer()
+  const overrideAnswerMut = useOverrideAnswer()
+  const undoDeleteMut = useUndoDelete()
 
   // Prompt state
   const [input, setInput] = useState('')
@@ -43,8 +57,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [slashQuery, setSlashQuery] = useState<string | null>(null)
   const [popoverIdx, setPopoverIdx] = useState(0)
-  const [catalog, setCatalog] = useState<CatalogItem[]>([])
-  const catalogLoaded = useRef(false)
+  const { data: catalog = [] } = useCatalog()
   const popoverRef = useRef<HTMLDivElement>(null)
 
   // Reset on card change
@@ -57,37 +70,27 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     setThread([]); setPastSessions([]); setViewingSession(null); setConversationsOpen(false)
   }
 
-  // Load catalog once per mount (not per card change) — catalog is only needed for @mentions
-  useEffect(() => {
-    if (!catalogLoaded.current) {
-      window.api.getCatalog().then(c => {
-        setCatalog(c)
-        catalogLoaded.current = true
-      })
-    }
-  }, [])
-
   // Load existing sessions on card change — restore current session thread if one exists
+  const { data: sessionsList } = useSessions(card.id)
+  const { data: currentSessionData } = useCurrentSession(card.id)
+
   useEffect(() => {
-    window.api.getSessions(card.id).then(sessions => {
-      setPastSessions(sessions)
-    })
-    window.api.getCurrentSession(card.id).then(session => {
-      console.log('[card-view] loaded session for', card.id, session)
-      if (session?.messages?.length) {
-        setThread(session.messages.map((m: any) => ({
-          role: m.role,
-          content: m.content,
-          ts: m.ts || Date.now(),
-          score: m.score,
-        })))
-        setRevealed(true)
-        // Restore last AI score so spaced repetition doesn't double-record
-        const lastAiMsg = [...session.messages].reverse().find((m: any) => m.role === 'assistant' && m.score != null)
-        if (lastAiMsg) setLastScore(lastAiMsg.score)
-      }
-    })
-  }, [card.id])
+    if (sessionsList) setPastSessions(sessionsList)
+  }, [sessionsList])
+
+  useEffect(() => {
+    if (currentSessionData?.messages?.length) {
+      setThread(currentSessionData.messages.map((m: any) => ({
+        role: m.role,
+        content: m.content,
+        ts: m.ts || Date.now(),
+        score: m.score,
+      })))
+      setRevealed(true)
+      const lastAiMsg = [...currentSessionData.messages].reverse().find((m: any) => m.role === 'assistant' && m.score != null)
+      if (lastAiMsg) setLastScore(lastAiMsg.score ?? null)
+    }
+  }, [currentSessionData])
 
   // Auto-scroll thread (also when spinner appears)
   useEffect(() => {
@@ -158,9 +161,9 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
           const newCorrect = newScore >= 1
           if (lastScore !== null) {
             const wasCorrect = lastScore >= 1
-            await window.api.overrideAnswer(card.id, wasCorrect, newCorrect)
+            await overrideAnswerMut.mutateAsync({ cardId: card.id, wasCorrect, nowCorrect: newCorrect })
           } else {
-            await window.api.recordAnswer(card.id, newCorrect)
+            await recordAnswerMut.mutateAsync({ cardId: card.id, correct: newCorrect })
           }
           setLastScore(newScore)
           const label = ['Incorrect', 'Partial', 'Correct'][newScore]
@@ -178,7 +181,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
         break
       }
       case 'conversations': setConversationsOpen(true); setConversationsIdx(0); break
-      case 'flag': await window.api.flagCard(card.id); break
+      case 'flag': await flagCardMut.mutateAsync(card.id); break
       case 'delete': setConfirmDelete(true); break
       case 'category': setDetailOpen(true); break
       case 'merge': break
@@ -279,7 +282,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
     const refCardIds = mentions.filter(m => m.type === 'card').map(m => m.id)
 
     try {
-      const r = await window.api.evaluateAnswer(card.id, plain, refCardIds, isFollowUp)
+      const r = await evaluateAnswerMut.mutateAsync({ cardId: card.id, answer: plain, refCardIds, isFollowUp })
       if (r.ok && r.feedback) {
         const aiMsg: ConversationMessage = {
           role: 'assistant',
@@ -295,7 +298,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
         // Auto-record AI score (spaced repetition update)
         if (r.score !== undefined && r.score >= 0 && lastScore === null) {
           setLastScore(r.score)
-          await window.api.recordAnswer(card.id, r.score >= 1)
+          await recordAnswerMut.mutateAsync({ cardId: card.id, correct: r.score >= 1 })
         }
       } else if (!r.ok) {
         setThread(prev => [...prev, { role: 'assistant', content: `Error: ${r.error || 'Unknown error'}`, ts: Date.now() }])
@@ -337,7 +340,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
               </div>
               <div className="border-t border-border py-0.5">
                 <MenuRow icon={<Flag size={13} />} label="Bad card" className="text-warning hover:!text-warning" onClick={async () => {
-                  setMenuOpen(false); await window.api.flagCard(card.id)
+                  setMenuOpen(false); await flagCardMut.mutateAsync(card.id)
                 }} />
                 <MenuRow icon={<Trash2 size={13} />} label="Delete" className="text-danger hover:!text-danger" onClick={() => {
                   setMenuOpen(false); setConfirmDelete(true)
@@ -373,7 +376,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
             </DialogClose>
             <button onClick={async () => {
               setConfirmDelete(false)
-              const result = await window.api.deleteCard(card.id)
+              const result = await deleteCardMut.mutateAsync(card.id)
               if (result.ok && result.undoToken) {
                 const timer = setTimeout(() => setUndoToast(null), 10000)
                 setUndoToast({ token: result.undoToken, timer })
@@ -577,7 +580,7 @@ export function CardView({ card, stats, sessionDone, sessionTotal }: Props) {
         <div className="absolute bottom-3 left-3 right-3 flex items-center gap-2 px-3 py-2 bg-[rgba(30,30,34,0.95)] backdrop-blur-xl border border-border rounded-[var(--radius-md)] animate-fade-up z-40">
           <span className="text-[12px] text-text-secondary flex-1">Card deleted</span>
           <button onClick={async () => {
-            await window.api.undoDelete(undoToast.token)
+            await undoDeleteMut.mutateAsync(undoToast.token)
             clearTimeout(undoToast.timer)
             setUndoToast(null)
           }}
@@ -613,26 +616,27 @@ function MenuRow({ icon, label, onClick, className }: { icon: React.ReactNode; l
 function EditInline({ card, onClose }: { card: Card; onClose: () => void }) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
   const [front, setFront] = useState(card.front)
   const [back, setBack] = useState(card.back)
+  const editChatMut = useEditCardChat()
+  const applyEditMut = useApplyCardEdit()
 
   const sendChat = async () => {
     const text = input.trim(); if (!text) return; setInput('')
     const newMsgs = [...messages, { role: 'user' as const, content: text }]
-    setMessages(newMsgs); setLoading(true)
+    setMessages(newMsgs)
     try {
-      const reply = await window.api.editCardChat(newMsgs, card)
+      const reply = await editChatMut.mutateAsync({ messages: newMsgs, card })
       setMessages([...newMsgs, { role: 'assistant', content: reply }])
       const m = reply.match(/```(?:json)?\s*([\s\S]*?)```/)
       if (m) { try { const j = JSON.parse(m[1].trim()); if (j.front) setFront(j.front); if (j.back) setBack(j.back) } catch {} }
     } catch (err: unknown) {
       setMessages([...newMsgs, { role: 'assistant', content: `Error: ${err instanceof Error ? err.message : 'failed'}` }])
-    } finally { setLoading(false) }
+    }
   }
 
   const accept = async () => {
-    const r = await window.api.applyCardEdit(card.id, front, back)
+    const r = await applyEditMut.mutateAsync({ cardId: card.id, front, back })
     if (!r.ok) alert('Could not save'); else onClose()
   }
 
@@ -658,7 +662,7 @@ function EditInline({ card, onClose }: { card: Card; onClose: () => void }) {
           className="flex-1 bg-surface border border-border rounded-[var(--radius-md)] text-text-primary text-[12px] px-2.5 py-1.5 outline-none focus:border-accent/40 transition-colors" />
         <button onClick={sendChat} className="w-7 h-7 border-none rounded-[var(--radius-md)] bg-accent text-white cursor-pointer shrink-0 text-sm flex items-center justify-center">↑</button>
       </div>
-      {loading && <div className="flex items-center justify-center gap-2 text-[12px] text-text-tertiary"><Spinner /> Thinking...</div>}
+      {editChatMut.isPending && <div className="flex items-center justify-center gap-2 text-[12px] text-text-tertiary"><Spinner /> Thinking...</div>}
       <div className="flex flex-col gap-1.5 shrink-0">
         <span className="text-[10px] font-medium text-text-tertiary uppercase tracking-wider">Question</span>
         <textarea value={front} onChange={(e) => setFront(e.target.value)} rows={2} className={ta} />

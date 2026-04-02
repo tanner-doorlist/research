@@ -1,21 +1,23 @@
 import { useState } from 'react'
 import type { Card } from '../lib/types'
+import { useSetCardTags } from '../hooks/use-api'
 
 interface Props { card: Card; onTagsChanged?: () => void }
 
 export function CardTags({ card, onTagsChanged }: Props) {
   const [adding, setAdding] = useState(false)
   const [tagInput, setTagInput] = useState('')
+  const setTagsMut = useSetCardTags()
 
   const removeTag = async (tag: string) => {
-    await window.api.setCardTags(card.id, card.tags.filter((t) => t !== tag))
+    await setTagsMut.mutateAsync({ cardId: card.id, tags: card.tags.filter((t) => t !== tag) })
     onTagsChanged?.()
   }
 
   const addTag = async () => {
     const tag = tagInput.trim().toLowerCase()
     if (!tag || card.tags.includes(tag)) return
-    await window.api.setCardTags(card.id, [...card.tags, tag])
+    await setTagsMut.mutateAsync({ cardId: card.id, tags: [...card.tags, tag] })
     setTagInput(''); setAdding(false); onTagsChanged?.()
   }
 

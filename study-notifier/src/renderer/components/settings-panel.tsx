@@ -1,32 +1,34 @@
 import { useState, useEffect } from 'react'
 import type { Settings } from '../lib/types'
+import { useSettings, useSaveSettings, useAutoTagCards, useConfigureMcp } from '../hooks/use-api'
 
 interface Props { open: boolean; onClose: () => void }
 const ANNOY_LABELS = ['Off', 'Low', 'Med', 'High']
 
 export function SettingsPanel({ open, onClose }: Props) {
+  const { data: loadedSettings } = useSettings(open)
   const [settings, setSettings] = useState<Settings | null>(null)
   const [serverUrl, setServerUrl] = useState('')
   const [teamToken, setTeamToken] = useState('')
-  const [autoTagging, setAutoTagging] = useState(false)
-  const [configuring, setConfiguring] = useState(false)
   const [configResult, setConfigResult] = useState<string | null>(null)
 
+  const saveMut = useSaveSettings()
+  const autoTagMut = useAutoTagCards()
+  const configureMcpMut = useConfigureMcp()
+
   useEffect(() => {
-    if (open) {
-      window.api.getSettings().then((s) => {
-        setSettings(s)
-        setServerUrl(s.serverUrl || '')
-        setTeamToken(s.teamToken || '')
-      })
+    if (loadedSettings && open) {
+      setSettings(loadedSettings)
+      setServerUrl(loadedSettings.serverUrl || '')
+      setTeamToken(loadedSettings.teamToken || '')
       setConfigResult(null)
     }
-  }, [open])
+  }, [loadedSettings, open])
 
   if (!open || !settings) return null
 
   const save = () => {
-    window.api.saveSettings({
+    saveMut.mutate({
       ...settings,
       serverUrl: serverUrl || undefined,
       teamToken: teamToken || undefined,
@@ -35,20 +37,15 @@ export function SettingsPanel({ open, onClose }: Props) {
   }
 
   const runAutoTag = async () => {
-    setAutoTagging(true)
-    try { const r = await window.api.autoTagCards(); if (!r.ok) alert(r.error || 'Auto-tag failed'); else window.api.openCatalog() }
-    finally { setAutoTagging(false) }
+    const r = await autoTagMut.mutateAsync()
+    if (!r.ok) alert(r.error || 'Auto-tag failed')
+    else window.api.openCatalog()
   }
 
   const configureMcp = async () => {
-    setConfiguring(true)
     setConfigResult(null)
-    try {
-      const r = await window.api.configureMcp()
-      setConfigResult(r.ok ? 'Claude Code configured' : (r.error || 'Failed'))
-    } finally {
-      setConfiguring(false)
-    }
+    const r = await configureMcpMut.mutateAsync()
+    setConfigResult(r.ok ? 'Claude Code configured' : (r.error || 'Failed'))
   }
 
   const inputCls = "w-full bg-surface border border-border rounded-[var(--radius-md)] text-text-primary text-[12px] px-2.5 py-1.5 outline-none focus:border-accent/40 transition-colors"
@@ -83,13 +80,13 @@ export function SettingsPanel({ open, onClose }: Props) {
           onFocus={(e) => (e.target.type = 'text')} onBlur={(e) => (e.target.type = 'password')} className={inputCls} />
       </div>
 
-      <button onClick={configureMcp} disabled={configuring || !serverUrl} className={btnCls}>
-        {configuring ? 'Configuring...' : 'Connect Claude Code'}
+      <button onClick={configureMcp} disabled={configureMcpMut.isPending || !serverUrl} className={btnCls}>
+        {configureMcpMut.isPending ? 'Configuring...' : 'Connect Claude Code'}
       </button>
       {configResult && <span className="text-[11px] text-text-secondary text-center">{configResult}</span>}
 
-      <button onClick={runAutoTag} disabled={autoTagging} className={btnCls}>
-        {autoTagging ? 'Running...' : 'Auto-generate categories'}
+      <button onClick={runAutoTag} disabled={autoTagMut.isPending} className={btnCls}>
+        {autoTagMut.isPending ? 'Running...' : 'Auto-generate categories'}
       </button>
       <button onClick={save}
         className="w-full h-7 border-none rounded-[var(--radius-md)] bg-accent text-white text-[12px] font-medium cursor-pointer hover:brightness-110 transition-all">

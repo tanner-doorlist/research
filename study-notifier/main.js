@@ -100,12 +100,15 @@ function sizeForView(type) {
 }
 
 // ── Remote server helpers ────────────────────────────────────────────────────
+const isLocalDev = process.env.LOCAL_DEV === '1'
+
 function getServerUrl() {
+  if (isLocalDev) return 'http://localhost:3000'
   return (settings.serverUrl || process.env.KNOWLEDGE_SCRIBE_URL || '').replace(/\/$/, '')
 }
 
 function getServerHeaders() {
-  const token = settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || ''
+  const token = isLocalDev ? 'dev-token' : (settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || '')
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -1054,7 +1057,7 @@ ipcMain.handle('repos:get',   async () => (await serverGet('/api/repos')).repos)
 ipcMain.handle('mcp:configure', async () => {
   try {
     const url = getServerUrl()
-    const token = settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || ''
+    const token = isLocalDev ? 'dev-token' : (settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || '')
     if (!url) return { ok: false, error: 'Set a server URL first' }
 
     const configPath = path.join(os.homedir(), '.claude.json')
