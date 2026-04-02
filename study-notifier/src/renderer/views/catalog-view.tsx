@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useState, useMemo, useRef, useCallback } from 'react'
 import type { CatalogItem, Stats } from '../lib/types'
 import { stripMarkdownPreview } from '../lib/markdown'
 import { Search, Trash2, Flag, Merge, Tag, X, Check, FolderOpen } from 'lucide-react'
@@ -6,6 +6,10 @@ import { Spinner } from '../components/spinner'
 import {
   Dialog, DialogContent, DialogTitle, DialogDescription, DialogClose,
 } from '../components/ui/dialog'
+import {
+  useRepos, useBulkDelete, useBulkSetTags, useBulkFlag, useBulkMerge,
+  useUnflagCard, useUnretireCard, useSemanticSearchCards,
+} from '../hooks/use-api'
 
 type FilterMode = 'active' | 'flagged' | 'retired'
 
@@ -15,19 +19,23 @@ export function CatalogView({ catalog, stats }: Props) {
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [filterMode, setFilterMode] = useState<FilterMode>('active')
-  const [repos, setRepos] = useState<string[]>([])
+  const { data: repos = [] } = useRepos()
   const [activeRepo, setActiveRepo] = useState<string | null>(null)
-
-  useEffect(() => { window.api.getRepos().then(setRepos) }, [])
   const [semanticMode, setSemanticMode] = useState(false)
   const [semanticOrder, setSemanticOrder] = useState<string[] | null>(null)
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Mutations
+  const bulkDeleteMut = useBulkDelete()
+  const bulkSetTagsMut = useBulkSetTags()
+  const bulkFlagMut = useBulkFlag()
+  const bulkMergeMut = useBulkMerge()
+  const semanticSearchMut = useSemanticSearchCards()
 
   // Multi-select state
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [confirmAction, setConfirmAction] = useState<'delete' | 'retag' | null>(null)
   const [retagValue, setRetagValue] = useState('')
-  const [merging, setMerging] = useState(false)
   const [toast, setToast] = useState<{ message: string; cardId?: string } | null>(null)
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -69,9 +77,10 @@ export function CatalogView({ catalog, stats }: Props) {
     setSearch(value); setSemanticMode(false); setSemanticOrder(null)
     if (searchTimer.current) clearTimeout(searchTimer.current)
     if (value.trim().length >= 3 && !looksLikeId(value)) {
-      searchTimer.current = setTimeout(async () => {
-        const r = await window.api.semanticSearchCards(value)
-        if (r.ok && r.orderedIds) { setSemanticMode(true); setSemanticOrder(r.orderedIds) }
+      searchTimer.current = setTimeout(() => {
+        semanticSearchMut.mutate(value, {
+          onSuccess: (r) => { if (r.ok && r.orderedIds) { setSemanticMode(true); setSemanticOrder(r.orderedIds) } },
+        })
       }, 600)
     }
   }
@@ -94,7 +103,7 @@ export function CatalogView({ catalog, stats }: Props) {
   const clearSelection = useCallback(() => setSelected(new Set()), [])
 
   const handleBulkDelete = async () => {
-    await window.api.bulkDelete([...selected])
+    await bulkDeleteMut.mutateAsync([...selected])
     setSelected(new Set())
     setConfirmAction(null)
   }
@@ -102,14 +111,14 @@ export function CatalogView({ catalog, stats }: Props) {
   const handleBulkRetag = async () => {
     const tags = retagValue.trim().split(/[\s,]+/).filter(Boolean)
     if (tags.length === 0) return
-    await window.api.bulkSetTags([...selected], tags)
+    await bulkSetTagsMut.mutateAsync({ cardIds: [...selected], tags })
     setSelected(new Set())
     setConfirmAction(null)
     setRetagValue('')
   }
 
   const handleBulkFlag = async () => {
-    await window.api.bulkFlag([...selected])
+    await bulkFlagMut.mutateAsync([...selected])
     setSelected(new Set())
   }
 
@@ -121,9 +130,8 @@ export function CatalogView({ catalog, stats }: Props) {
 
   const handleBulkMerge = async () => {
     const count = selected.size
-    setMerging(true)
     try {
-      const r = await window.api.bulkMerge([...selected])
+      const r = await bulkMergeMut.mutateAsync([...selected])
       setSelected(new Set())
       if (r.ok) {
         showToast(`Merged ${count} cards → ${r.newCardId?.slice(0, 8) ?? 'new card'}`, r.newCardId)
@@ -133,7 +141,7 @@ export function CatalogView({ catalog, stats }: Props) {
     } catch (e) {
       showToast(`Merge failed: ${e instanceof Error ? e.message : 'unknown error'}`)
       setSelected(new Set())
-    } finally { setMerging(false) }
+    }
   }
 
   const totalAns = (stats.totalGot || 0) + (stats.totalMiss || 0)
@@ -167,9 +175,9 @@ export function CatalogView({ catalog, stats }: Props) {
           </button>
           <div className="flex-1" />
           {selected.size >= 2 && (
-            <button onClick={handleBulkMerge} disabled={merging} title="Merge into one"
+            <button onClick={handleBulkMerge} disabled={bulkMergeMut.isPending} title="Merge into one"
               className="w-6 h-6 border-none rounded-[var(--radius-md)] cursor-pointer flex items-center justify-center bg-transparent text-text-secondary hover:bg-surface hover:text-text-primary transition-colors disabled:opacity-30">
-              {merging ? <Spinner /> : <Merge size={13} />}
+              {bulkMergeMut.isPending ? <Spinner /> : <Merge size={13} />}
             </button>
           )}
           <button onClick={() => { setRetagValue(''); setConfirmAction('retag') }} title="Recategorize"
@@ -289,7 +297,7 @@ export function CatalogView({ catalog, stats }: Props) {
       </Dialog>
 
       {/* Merging overlay */}
-      {merging && (
+      {bulkMergeMut.isPending && (
         <div className="absolute inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center">
           <div className="flex items-center gap-2 px-4 py-3 bg-[rgba(30,30,34,0.97)] border border-border rounded-[var(--radius-lg)] text-[12px] text-text-secondary">
             <Spinner /> Merging {selected.size} cards...
@@ -341,16 +349,19 @@ function Row({ item, last, selectMode, isSelected, onToggle, onLongSelect }: {
   selectMode: boolean; isSelected: boolean
   onToggle: () => void; onLongSelect: () => void
 }) {
+  const unflagMut = useUnflagCard()
+  const unretireMut = useUnretireCard()
+
   const c = item.accuracy === null ? 'bg-text-tertiary'
     : item.accuracy >= 80 ? 'bg-success' : item.accuracy >= 50 ? 'bg-warning' : 'bg-danger'
 
   const statusLabel = item.retired ? 'Retired' : item.flagged ? 'Flagged' : null
   const statusColor = item.retired ? 'text-text-tertiary' : 'text-warning'
 
-  const handleRestore = async (e: React.MouseEvent) => {
+  const handleRestore = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (item.flagged) await window.api.unflagCard(item.id)
-    else if (item.retired) await window.api.unretireCard(item.id)
+    if (item.flagged) unflagMut.mutate(item.id)
+    else if (item.retired) unretireMut.mutate(item.id)
   }
 
   const handleClick = () => {

@@ -2,21 +2,29 @@
 set -euo pipefail
 
 # Start the dev environment.
-# By default, launches just the Electron app (pointing at the production server or KNOWLEDGE_SCRIBE_URL).
-# With --local-server, also starts the remote-mcp-server + Postgres for full-stack local dev.
+# By default, launches full-stack local dev (Electron + local server + Postgres).
+# With --remote, skips local server and points at production/KNOWLEDGE_SCRIBE_URL instead.
 #
 # Usage:
-#   ./scripts/dev                          # Electron only (uses remote server)
-#   ./scripts/dev --local-server           # Electron + local server + Postgres
+#   ./scripts/dev                          # Electron + local server + Postgres
+#   ./scripts/dev --remote                 # Electron only (uses remote server)
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-LOCAL_SERVER=false
+LOCAL_SERVER=true
 
 for arg in "$@"; do
   case "$arg" in
+    --remote) LOCAL_SERVER=false ;;
     --local-server) LOCAL_SERVER=true ;;
   esac
 done
+
+# ── Load .env ────────────────────────────────────────────────────────────────
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
 
 # ── Preflight ────────────────────────────────────────────────────────────────
 if [ ! -d "$REPO_DIR/study-notifier/node_modules" ]; then
@@ -53,6 +61,10 @@ if [ "$LOCAL_SERVER" = true ]; then
     sleep 1
   done
 
+  # Seed test data (idempotent — ON CONFLICT DO NOTHING)
+  echo "==> Seeding test data"
+  docker compose exec -T postgres psql -U postgres -d study_notifier -f - < "$REPO_DIR/scripts/seed.sql" 2>&1 | tail -1
+
   cleanup() {
     echo ""
     echo "==> Shutting down Docker services"
@@ -60,6 +72,7 @@ if [ "$LOCAL_SERVER" = true ]; then
   }
   trap cleanup EXIT INT TERM
 
+  export LOCAL_DEV=1
   export KNOWLEDGE_SCRIBE_URL="http://localhost:3000"
   export KNOWLEDGE_SCRIBE_TOKEN="${KNOWLEDGE_SCRIBE_TOKEN:-dev-token}"
   export TEAM_TOKEN="${KNOWLEDGE_SCRIBE_TOKEN}"

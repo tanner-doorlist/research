@@ -3,30 +3,38 @@ import type { Card } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { stripMarkdownPreview } from '../lib/markdown'
 import { Spinner } from '../components/spinner'
+import { useChatSend } from '../hooks/use-api'
 
 export function ChatView({ card }: { card: Card }) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(true)
   const scrollRef = useRef<HTMLDivElement>(null)
   const initialized = useRef(false)
+  const chatMut = useChatSend()
 
   useEffect(() => {
     if (initialized.current) return; initialized.current = true
-    window.api.chatSend([{ role: 'user', content: "Let's dig into this. Give me a brief framing of the core concept, then ask me one probing question to check my understanding." }], card)
-      .then((r) => { setMessages([{ role: 'assistant', content: r }]); setLoading(false) })
-      .catch(() => { setMessages([{ role: 'assistant', content: 'Set ANTHROPIC_API_KEY to enable chat.' }]); setLoading(false) })
+    chatMut.mutate(
+      { messages: [{ role: 'user', content: "Let's dig into this. Give me a brief framing of the core concept, then ask me one probing question to check my understanding." }], card },
+      {
+        onSuccess: (r) => setMessages([{ role: 'assistant', content: r }]),
+        onError: () => setMessages([{ role: 'assistant', content: 'Set ANTHROPIC_API_KEY to enable chat.' }]),
+      },
+    )
   }, [card])
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages, loading])
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }) }, [messages, chatMut.isPending])
 
   const send = async () => {
     const text = input.trim(); if (!text) return; setInput('')
     const h = [...messages, { role: 'user' as const, content: text }]
-    setMessages(h); setLoading(true)
-    try { const r = await window.api.chatSend(h, card); setMessages([...h, { role: 'assistant', content: r }]) }
-    catch { setMessages([...h, { role: 'assistant', content: 'Error — check API key.' }]) }
-    finally { setLoading(false) }
+    setMessages(h)
+    try {
+      const r = await chatMut.mutateAsync({ messages: h, card })
+      setMessages([...h, { role: 'assistant', content: r }])
+    } catch {
+      setMessages([...h, { role: 'assistant', content: 'Error — check API key.' }])
+    }
   }
 
   return (
@@ -46,7 +54,7 @@ export function ChatView({ card }: { card: Card }) {
             {m.role === 'user' ? m.content : <MarkdownRender content={m.content} />}
           </div>
         ))}
-        {loading && <div className="self-start flex items-center gap-2 text-text-tertiary text-[12px] italic px-3 py-2"><Spinner /> Thinking...</div>}
+        {chatMut.isPending && <div className="self-start flex items-center gap-2 text-text-tertiary text-[12px] italic px-3 py-2"><Spinner /> Thinking...</div>}
       </div>
 
       <div className="flex gap-1.5 px-[var(--spacing-x)] py-2 shrink-0 border-t border-border">

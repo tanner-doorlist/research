@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { GapCardSuggestion } from '../lib/types'
 import { Check, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { useApproveGapCard, useDenyGapCard } from '../hooks/use-api'
 
 interface Props {
   suggestion: GapCardSuggestion
@@ -11,18 +12,18 @@ export function GapCardToast({ suggestion, onDone }: Props) {
   const [expanded, setExpanded] = useState(false)
   const [denying, setDenying] = useState(false)
   const [reason, setReason] = useState('')
-  const [loading, setLoading] = useState(false)
+  const approveMut = useApproveGapCard()
+  const denyMut = useDenyGapCard()
+  const loading = approveMut.isPending || denyMut.isPending
 
   const approve = async () => {
-    setLoading(true)
-    await window.api.approveGapCard(suggestion.id)
+    await approveMut.mutateAsync(suggestion.id)
     onDone()
   }
 
   const deny = async () => {
     if (!denying) { setDenying(true); return }
-    setLoading(true)
-    await window.api.denyGapCard(suggestion.id, reason.trim() || undefined)
+    await denyMut.mutateAsync({ id: suggestion.id, reason: reason.trim() || undefined })
     onDone()
   }
 

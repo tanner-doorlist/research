@@ -1,15 +1,14 @@
-import { useState } from 'react'
 import type { AnalyticsData } from '../lib/types'
 import { ActivityChart } from '../components/activity-chart'
 import { Zap, Target, Calendar, TrendingUp, Brain, BarChart3 } from 'lucide-react'
 import { Spinner } from '../components/spinner'
+import { useIndexCards } from '../hooks/use-api'
 
 export function AnalyticsView({ analytics }: { analytics: AnalyticsData }) {
-  const [indexing, setIndexing] = useState(false)
+  const indexMut = useIndexCards()
   const indexCards = async () => {
-    setIndexing(true)
-    try { const r = await window.api.indexCards(); if (!r.ok) alert(r.error || 'Failed') }
-    finally { setIndexing(false) }
+    const r = await indexMut.mutateAsync()
+    if (!r.ok) alert(r.error || 'Failed')
   }
 
   const totalAnswered = analytics.categoryStats.reduce((n, c) => n + c.got + c.miss, 0)
@@ -97,9 +96,9 @@ export function AnalyticsView({ analytics }: { analytics: AnalyticsData }) {
 
       {/* Index button */}
       <div className="px-[var(--spacing-x)] py-3 shrink-0">
-        <button onClick={indexCards} disabled={indexing}
+        <button onClick={indexCards} disabled={indexMut.isPending}
           className="w-full h-7 border border-border rounded-[var(--radius-md)] bg-transparent text-text-secondary text-[12px] font-medium cursor-pointer hover:bg-surface hover:text-text-primary disabled:opacity-40 transition-colors flex items-center justify-center gap-2">
-          {indexing ? <><Spinner /> Indexing...</> : 'Index for semantic search'}
+          {indexMut.isPending ? <><Spinner /> Indexing...</> : 'Index for semantic search'}
         </button>
       </div>
     </div>

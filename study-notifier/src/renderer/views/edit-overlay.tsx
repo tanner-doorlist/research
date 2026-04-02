@@ -3,34 +3,36 @@ import type { Card } from '../lib/types'
 import { MarkdownRender } from '../components/markdown-render'
 import { Spinner } from '../components/spinner'
 import { X } from 'lucide-react'
+import { useEditCardChat, useApplyCardEdit } from '../hooks/use-api'
 
 interface Props { card: Card; open: boolean; onClose: () => void }
 
 export function EditOverlay({ card, open, onClose }: Props) {
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([])
   const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
   const [front, setFront] = useState(card.front)
   const [back, setBack] = useState(card.back)
+  const editChatMut = useEditCardChat()
+  const applyEditMut = useApplyCardEdit()
 
   if (!open) return null
 
   const sendChat = async () => {
     const text = input.trim(); if (!text) return; setInput('')
     const newMsgs = [...messages, { role: 'user' as const, content: text }]
-    setMessages(newMsgs); setLoading(true)
+    setMessages(newMsgs)
     try {
-      const reply = await window.api.editCardChat(newMsgs, card)
+      const reply = await editChatMut.mutateAsync({ messages: newMsgs, card })
       setMessages([...newMsgs, { role: 'assistant', content: reply }])
       const m = reply.match(/```(?:json)?\s*([\s\S]*?)```/)
       if (m) { try { const j = JSON.parse(m[1].trim()); if (j.front) setFront(j.front); if (j.back) setBack(j.back) } catch {} }
     } catch (err: unknown) {
       setMessages([...newMsgs, { role: 'assistant', content: `Error: ${err instanceof Error ? err.message : 'failed'}` }])
-    } finally { setLoading(false) }
+    }
   }
 
   const accept = async () => {
-    const r = await window.api.applyCardEdit(card.id, front, back)
+    const r = await applyEditMut.mutateAsync({ cardId: card.id, front, back })
     if (!r.ok) alert('Could not save card'); else onClose()
   }
 
@@ -66,7 +68,7 @@ export function EditOverlay({ card, open, onClose }: Props) {
           className="w-8 h-8 border-none rounded-[var(--radius-md)] bg-accent text-white cursor-pointer shrink-0 text-sm flex items-center justify-center">↑</button>
       </div>
 
-      {loading && <div className="flex items-center justify-center gap-[var(--spacing-gap)] text-[12px] text-text-dim"><Spinner /> Thinking...</div>}
+      {editChatMut.isPending && <div className="flex items-center justify-center gap-[var(--spacing-gap)] text-[12px] text-text-dim"><Spinner /> Thinking...</div>}
 
       <div className="flex flex-col gap-[var(--spacing-gap-sm)] shrink-0">
         <span className="text-[10px] font-semibold text-text-dimmer uppercase tracking-wider">Draft question / answer</span>
