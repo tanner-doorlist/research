@@ -64,6 +64,8 @@ Requires: Postgres running, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `TEAM_TOKEN`
 
 ### Deploy
 
+**GCP project: `doorlistdev` only.** Never run Terraform, `gcloud`, `gsutil`, or Docker push commands against any other GCP project. All infra lives in `doorlistdev`. If a command defaults to a different project, stop and fix it.
+
 ```bash
 ./scripts/deploy                   # Docker build + push + terraform apply
 ```

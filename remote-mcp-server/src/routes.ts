@@ -41,9 +41,9 @@ api.post('/generate-cards', async (c) => {
 })
 
 api.post('/review-pr', async (c) => {
-  const { pr_number, owner, repo } = await c.req.json()
-  if (!pr_number || !owner || !repo) return c.json({ error: 'pr_number, owner, and repo required' }, 400)
-  const result = await reviewPr(pr_number, owner, repo)
+  const { pr_number, owner, repo, github_token } = await c.req.json()
+  if (!pr_number || !owner || !repo || !github_token) return c.json({ error: 'pr_number, owner, repo, and github_token required' }, 400)
+  const result = await reviewPr(pr_number, owner, repo, github_token)
   return c.json({ result })
 })
 

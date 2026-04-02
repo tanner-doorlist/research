@@ -53,9 +53,10 @@ export function createMcpServer(): McpServer {
       pr_number: z.number().describe('GitHub PR number'),
       owner: z.string().describe('GitHub repo owner, e.g. "tanner-doorlist"'),
       repo: z.string().describe('GitHub repo name, e.g. "doorlite-next"'),
+      github_token: z.string().describe('GitHub personal access token with repo read access'),
     },
-    async ({ pr_number, owner, repo }) => ({
-      content: [{ type: 'text' as const, text: await reviewPr(pr_number, owner, repo) }],
+    async ({ pr_number, owner, repo, github_token }) => ({
+      content: [{ type: 'text' as const, text: await reviewPr(pr_number, owner, repo, github_token) }],
     }),
   )
 

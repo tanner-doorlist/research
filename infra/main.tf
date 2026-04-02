@@ -5,14 +5,8 @@ locals {
   database_url = "postgresql://scribe:${var.db_password}@${google_sql_database_instance.postgres.private_ip_address}:5432/study_notifier"
 }
 
-# ── Artifact Registry ────────────────────────────────────────────────────────
-
-resource "google_artifact_registry_repository" "services" {
-  location      = var.region
-  repository_id = "services"
-  format        = "DOCKER"
-  description   = "Knowledge scribe Docker images"
-}
+# ── Artifact Registry (managed by doorlist infra, shared across projects) ────
+# The "services" repo already exists — just reference it for the image path.
 
 # ── Service Account ──────────────────────────────────────────────────────────
 
@@ -93,10 +87,6 @@ resource "google_cloud_run_v2_service" "scribe" {
         value = var.team_token
       }
       env {
-        name  = "GITHUB_TOKEN"
-        value = var.github_token
-      }
-      env {
         name  = "PORT"
         value = "3000"
       }
@@ -109,7 +99,6 @@ resource "google_cloud_run_v2_service" "scribe" {
   }
 
   depends_on = [
-    google_artifact_registry_repository.services,
     google_sql_database.study_notifier,
     google_sql_user.scribe,
   ]
