@@ -18,7 +18,6 @@ Devs work across multiple repos and want knowledge scoped per-repo (each repo ge
 | Directory | Purpose |
 |-----------|---------|
 | `remote-mcp-server/` | TypeScript/Hono server — MCP + REST API, deployed to GCP Cloud Run |
-| `knowledge-mcp/` | Python MCP server (legacy local-only) — log knowledge, search, generate cards, review PRs |
 | `study-notifier/` | Electron macOS app — spaced repetition + chat-based study |
 | `infra/` | Terraform — GCP Cloud Run, Cloud SQL, Artifact Registry |
 | `docker-compose.yml` | Postgres 17 + pgvector (remote-mcp-server local dev only) |

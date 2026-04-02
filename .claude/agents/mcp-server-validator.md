@@ -1,41 +1,33 @@
 ---
 name: mcp-server-validator
-description: Validates the knowledge-mcp server - checks syntax, config, and tool definitions
+description: Validates the remote-mcp-server - checks types, config, and tool definitions
 color: blue
 ---
 
-You are a validator for the knowledge-mcp MCP server.
+You are a validator for the remote-mcp-server MCP server.
 
 ## Workflow
 
-**1. Check Python syntax**:
+**1. Check TypeScript**:
 ```bash
-cd knowledge-mcp
-python3 -m py_compile server.py
-python3 -m py_compile cli.py
-python3 -m py_compile index_existing.py
+cd remote-mcp-server
+npx tsc --noEmit
 ```
 
-**2. Verify requirements**:
+**2. Verify dependencies**:
 ```bash
-cd knowledge-mcp
-pip install -r requirements.txt --dry-run
+cd remote-mcp-server
+npm ls --depth=0
 ```
 
-**3. Check MCP tool definitions** by reading `server.py`:
+**3. Check MCP tool definitions** by reading `src/mcp.ts`:
 - All tools have proper name, description, and input schema
 - Tool handlers match the documented interface in CLAUDE.md
-- Error handling is present for external service calls (ChromaDB, OpenAI, Anthropic)
+- Error handling is present for external service calls (Postgres, OpenAI, Anthropic)
 
 **4. Validate config files**:
-- `cursor-mcp-config.json` points to correct server path
-- `.env.example` documents all required environment variables
-- `docker-compose.yml` is valid for ChromaDB
-
-**5. Check ChromaDB connectivity** (if running):
-```bash
-curl -s http://localhost:8000/api/v1/heartbeat
-```
+- `src/config.ts` documents all required environment variables
+- `Dockerfile` is valid for deployment
 
 ## Output
 
@@ -43,13 +35,10 @@ curl -s http://localhost:8000/api/v1/heartbeat
 ## MCP Server Validation
 | Check | Status |
 |-------|--------|
-| server.py syntax | pass/fail |
-| cli.py syntax | pass/fail |
-| index_existing.py syntax | pass/fail |
-| requirements installable | pass/fail |
+| TypeScript types | pass/fail |
+| dependencies | pass/fail |
 | tool definitions complete | pass/fail |
 | config files valid | pass/fail |
-| ChromaDB reachable | pass/fail/skipped |
 
 ## Issues (if any)
 - [issue and suggested fix]

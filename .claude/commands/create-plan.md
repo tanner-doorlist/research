@@ -31,11 +31,8 @@ An execution plan ("ExecPlan") is a design document a coding agent can follow to
 
 | Project | Stack |
 |---------|-------|
-| knowledge-mcp | Python, ChromaDB, OpenAI embeddings, Anthropic API |
-| study-notifier | Electron, vanilla JS, HTML/CSS |
-| generate_study_cards.py | Python, Anthropic API |
-| study-cards | TSV data, JSON state |
-| problem-logs | Markdown files with frontmatter |
+| remote-mcp-server | TypeScript, Hono, MCP SDK, Postgres/pgvector, OpenAI embeddings, Anthropic API |
+| study-notifier | Electron, React, TypeScript, Tailwind, Vite |
 
 ## ExecPlan Skeleton
 
