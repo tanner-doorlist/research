@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Release Study Notifier: build DMGs, create GitHub Release, update Homebrew tap
+# Usage: ./scripts/release [version]
+#   version: semver without "v" prefix (e.g. 1.1.0). Defaults to package.json version.
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$REPO_ROOT/study-notifier"
+
+VERSION="${1:-$(node -p "require('./package.json').version")}"
+TAG="v${VERSION}"
+
+echo "==> Building Study Notifier ${VERSION}"
+
+# Build renderer
+npx vite build
+
+# Build DMGs for both architectures
+rm -rf dist
+npx electron-builder --mac dmg --arm64
+npx electron-builder --mac dmg --x64
+
+# Verify DMGs exist
+ARM64_DMG="dist/Study-Notifier-${VERSION}-arm64.dmg"
+X64_DMG="dist/Study-Notifier-${VERSION}-x64.dmg"
+
+if [[ ! -f "$ARM64_DMG" ]]; then
+  echo "ERROR: $ARM64_DMG not found. Check electron-builder output."
+  ls dist/*.dmg 2>/dev/null || echo "No DMGs in dist/"
+  exit 1
+fi
+if [[ ! -f "$X64_DMG" ]]; then
+  echo "ERROR: $X64_DMG not found. Check electron-builder output."
+  ls dist/*.dmg 2>/dev/null || echo "No DMGs in dist/"
+  exit 1
+fi
+
+echo "==> Built DMGs:"
+ls -lh dist/*.dmg
+
+# Create git tag if it doesn't exist
+cd "$REPO_ROOT"
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "==> Tag $TAG already exists, using existing tag"
+else
+  echo "==> Creating tag $TAG"
+  git tag "$TAG"
+  git push origin "$TAG"
+fi
+
+# Create GitHub Release
+echo "==> Creating GitHub Release $TAG"
+gh release create "$TAG" \
+  "study-notifier/$ARM64_DMG" \
+  "study-notifier/$X64_DMG" \
+  --repo tanner-doorlist/research \
+  --title "Study Notifier ${VERSION}" \
+  --generate-notes
+
+# Compute SHA256 hashes and update Homebrew tap
+SHA_ARM64=$(shasum -a 256 "study-notifier/$ARM64_DMG" | awk '{print $1}')
+SHA_X64=$(shasum -a 256 "study-notifier/$X64_DMG" | awk '{print $1}')
+
+echo "==> SHA256 hashes:"
+echo "  arm64: $SHA_ARM64"
+echo "  x64:   $SHA_X64"
+
+# Clone and update tap repo
+TAP_DIR=$(mktemp -d)
+echo "==> Updating Homebrew tap"
+gh repo clone tanner-doorlist/homebrew-study-notifier "$TAP_DIR" 2>/dev/null || {
+  echo "WARNING: Could not clone tap repo. Create it first:"
+  echo "  gh repo create tanner-doorlist/homebrew-study-notifier --public"
+  echo ""
+  echo "Then create Casks/study-notifier.rb with these SHA256 values."
+  rm -rf "$TAP_DIR"
+  exit 0
+}
+
+mkdir -p "$TAP_DIR/Casks"
+cat > "$TAP_DIR/Casks/study-notifier.rb" << CASKEOF
+cask "study-notifier" do
+  version "${VERSION}"
+
+  if Hardware::CPU.arm?
+    url "https://github.com/tanner-doorlist/research/releases/download/v#{version}/Study-Notifier-#{version}-arm64.dmg"
+    sha256 "${SHA_ARM64}"
+  else
+    url "https://github.com/tanner-doorlist/research/releases/download/v#{version}/Study-Notifier-#{version}-x64.dmg"
+    sha256 "${SHA_X64}"
+  end
+
+  name "Study Notifier"
+  desc "Spaced repetition study notifier for development teams"
+  homepage "https://github.com/tanner-doorlist/research"
+
+  app "Study Notifier.app"
+
+  zap trash: [
+    "~/Library/Application Support/study-notifier",
+    "~/Library/Preferences/app.doorlist.study-notifier.plist",
+    "~/Library/Caches/app.doorlist.study-notifier",
+  ]
+end
+CASKEOF
+
+cd "$TAP_DIR"
+git add -A
+git commit -m "Update study-notifier to ${VERSION}"
+git push
+cd "$REPO_ROOT"
+rm -rf "$TAP_DIR"
+
+echo ""
+echo "==> Released Study Notifier ${VERSION}"
+echo "    Install: brew install --cask tanner-doorlist/study-notifier/study-notifier"
