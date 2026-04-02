@@ -44,7 +44,7 @@ resource "google_cloud_run_v2_service" "scribe" {
       image = local.image
 
       ports {
-        container_port = 3000
+        container_port = 8080
       }
 
       resources {
@@ -85,10 +85,6 @@ resource "google_cloud_run_v2_service" "scribe" {
       env {
         name  = "TEAM_TOKEN"
         value = var.team_token
-      }
-      env {
-        name  = "PORT"
-        value = "3000"
       }
     }
   }
