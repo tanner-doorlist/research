@@ -12,10 +12,6 @@
 **/.env
 !**/.env.example
 
-# ChromaDB data
-knowledge-mcp/chroma_db/
-knowledge-mcp/chroma-data/
-
 # Electron build artifacts
 study-notifier/build/
 study-notifier/dist-renderer/
