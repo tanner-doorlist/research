@@ -56,7 +56,7 @@ export function KnowledgeView() {
     const r = await searchMutation.mutateAsync(q)
     setResults(r)
   }
-  const tags = (s: string) => s.replace(/[\[\]"]/g, '').split(',').map((t) => t.trim()).filter(Boolean).join(', ')
+  const tags = (s: string | string[]) => Array.isArray(s) ? s.filter(Boolean).join(', ') : s.replace(/[\[\]"]/g, '').split(',').map((t) => t.trim()).filter(Boolean).join(', ')
   const logTitle = (filename: string) => logs.find(l => l.filename === filename)?.problem || filename
 
   return (
