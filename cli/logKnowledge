@@ -19,6 +19,7 @@ set -euo pipefail
 
 CONFIG_DIR="${HOME}/.config/knowledge-scribe"
 CONFIG_FILE="${CONFIG_DIR}/config"
+DEFAULT_SERVER_URL="https://knowledge-scribe-hyptquuapq-uc.a.run.app"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -31,7 +32,7 @@ load_config() {
   fi
   # shellcheck source=/dev/null
   source "$CONFIG_FILE"
-  [[ -n "${KNOWLEDGE_SCRIBE_URL:-}" ]] || die "KNOWLEDGE_SCRIBE_URL not set in $CONFIG_FILE"
+  KNOWLEDGE_SCRIBE_URL="${KNOWLEDGE_SCRIBE_URL:-$DEFAULT_SERVER_URL}"
   [[ -n "${KNOWLEDGE_SCRIBE_TOKEN:-}" ]] || die "KNOWLEDGE_SCRIBE_TOKEN not set in $CONFIG_FILE"
 }
 
@@ -49,17 +50,17 @@ do_setup() {
   if [[ -f "$CONFIG_FILE" ]]; then
     # shellcheck source=/dev/null
     source "$CONFIG_FILE"
-    echo "Current config: ${KNOWLEDGE_SCRIBE_URL:-<not set>}"
+    echo "Current server: ${KNOWLEDGE_SCRIBE_URL:-$DEFAULT_SERVER_URL}"
     echo ""
   fi
 
-  read -rp "Server URL (e.g. https://scribe-xxxxxxxxxx-uc.a.run.app): " url
-  [[ -n "$url" ]] || die "URL is required"
-  # Strip trailing slash
-  url="${url%/}"
-
   read -rp "Team token: " token
   [[ -n "$token" ]] || die "Token is required"
+
+  read -rp "Server URL [${DEFAULT_SERVER_URL}]: " url
+  url="${url:-$DEFAULT_SERVER_URL}"
+  # Strip trailing slash
+  url="${url%/}"
 
   cat > "$CONFIG_FILE" << EOF
 # Knowledge Scribe CLI config
@@ -81,7 +82,7 @@ EOF
   if [[ "$status" == "200" ]]; then
     echo "Connected successfully."
   else
-    echo "WARNING: Could not reach server (HTTP ${status:-timeout}). Check URL and token."
+    echo "WARNING: Could not reach server (HTTP ${status:-timeout}). Check token."
   fi
 }
 
@@ -190,7 +191,7 @@ USAGE
   logKnowledge --help
 
 COMMANDS
-  --setup           Configure server URL and authentication token
+  --setup           Configure authentication token (server URL defaults to production)
   --help            Show this help message
 
 LOG KNOWLEDGE
@@ -247,8 +248,9 @@ EXAMPLES
   logKnowledge --search "pgvector index behavior"
 
 CONFIG
-  Server URL and token are stored in ~/.config/knowledge-scribe/config
-  Run 'logKnowledge --setup' to configure.
+  Token and server URL are stored in ~/.config/knowledge-scribe/config
+  Run 'logKnowledge --setup' to configure. Only the team token is required;
+  the server URL defaults to the production Knowledge Scribe instance.
 HELPEOF
 }
 
