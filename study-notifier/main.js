@@ -93,13 +93,30 @@ function sizeForView(type) {
 // ── Remote server helpers ────────────────────────────────────────────────────
 const isLocalDev = process.env.LOCAL_DEV === '1'
 
+const PRODUCTION_SERVER_URL = 'https://knowledge-scribe-hyptquuapq-uc.a.run.app'
+const CLI_CONFIG_PATH = path.join(os.homedir(), '.config', 'knowledge-scribe', 'config')
+
+function loadCliConfig() {
+  try {
+    const content = fs.readFileSync(CLI_CONFIG_PATH, 'utf-8')
+    const vars = {}
+    for (const line of content.split('\n')) {
+      const m = line.match(/^(\w+)="(.+)"$/)
+      if (m) vars[m[1]] = m[2]
+    }
+    return vars
+  } catch { return {} }
+}
+
 function getServerUrl() {
   if (isLocalDev) return 'http://localhost:3000'
-  return (settings.serverUrl || process.env.KNOWLEDGE_SCRIBE_URL || '').replace(/\/$/, '')
+  const cli = loadCliConfig()
+  return (settings.serverUrl || process.env.KNOWLEDGE_SCRIBE_URL || cli.KNOWLEDGE_SCRIBE_URL || PRODUCTION_SERVER_URL).replace(/\/$/, '')
 }
 
 function getServerHeaders() {
-  const token = isLocalDev ? 'dev-token' : (settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || '')
+  const cli = loadCliConfig()
+  const token = isLocalDev ? 'dev-token' : (settings.teamToken || process.env.KNOWLEDGE_SCRIBE_TOKEN || cli.KNOWLEDGE_SCRIBE_TOKEN || '')
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
