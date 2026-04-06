@@ -1,6 +1,9 @@
 import pg from 'pg'
 import { DATABASE_URL } from './config.js'
 
+let onLogInsert: (() => void) | null = null
+export function setOnLogInsert(cb: () => void) { onLogInsert = cb }
+
 const pool = new pg.Pool({ connectionString: DATABASE_URL, max: 5 })
 
 export async function initSchema() {
@@ -178,6 +181,7 @@ export async function upsertLog(
       [filename, date, logType, problem, tags, content, repo],
     )
   }
+  if (onLogInsert) onLogInsert()
 }
 
 export async function getUnprocessedLogs() {
