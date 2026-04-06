@@ -946,7 +946,6 @@ async function fireNotification() {
     console.log(`[notify] firing session: ${sessionQueue.length} cards`)
     notificationSession = true
     currentCard = sessionQueue[0]
-    showPill(currentCard)
 
     if (Notification.isSupported()) {
       showStudyNotification(currentCard, sessionQueue.length)
