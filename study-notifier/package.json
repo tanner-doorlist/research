@@ -1,6 +1,6 @@
 {
   "name": "study-notifier",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Spaced repetition notifier with liquid glass UI",
   "author": "Tanner Hornsby",
   "main": "main.js",
@@ -8,7 +8,7 @@
     "dev": "concurrently -k \"vite\" \"wait-on http://localhost:5173 && VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
     "start": "vite build && electron .",
     "build:renderer": "vite build",
-    "build": "vite build && rm -rf dist && electron-builder --mac --dir && rm -rf ~/Applications/Study\\ Notifier.app && cp -R dist/mac-arm64/Study\\ Notifier.app ~/Applications/",
+    "build": "vite build && rm -rf dist && electron-builder --mac --dir",
     "build:dmg": "vite build && rm -rf dist && electron-builder --mac",
     "test": "vitest run",
     "test:watch": "vitest",
