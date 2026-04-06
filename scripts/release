@@ -59,11 +59,15 @@ gh release create "$TAG" \
   --title "Study Notifier ${VERSION}" \
   --generate-notes
 
-# Compute SHA256 hashes and update Homebrew tap
-SHA_ARM64=$(shasum -a 256 "study-notifier/$ARM64_DMG" | awk '{print $1}')
-SHA_X64=$(shasum -a 256 "study-notifier/$X64_DMG" | awk '{print $1}')
+# Download release assets and compute SHA256 from what GitHub actually serves
+DL_DIR=$(mktemp -d)
+echo "==> Downloading release assets to compute SHA256 hashes"
+gh release download "$TAG" --repo tanner-doorlist/research --dir "$DL_DIR"
 
-SHA_CLI=$(shasum -a 256 "cli/logKnowledge" | awk '{print $1}')
+SHA_ARM64=$(shasum -a 256 "$DL_DIR/Study-Notifier-${VERSION}-arm64.dmg" | awk '{print $1}')
+SHA_X64=$(shasum -a 256 "$DL_DIR/Study-Notifier-${VERSION}-x64.dmg" | awk '{print $1}')
+SHA_CLI=$(shasum -a 256 "$DL_DIR/logKnowledge" | awk '{print $1}')
+rm -rf "$DL_DIR"
 
 echo "==> SHA256 hashes:"
 echo "  arm64: $SHA_ARM64"
@@ -130,7 +134,7 @@ class LogKnowledge < Formula
 
   def caveats
     <<~EOS
-      Run 'logKnowledge --setup' to configure your server URL and team token.
+      Run 'logKnowledge --setup' to configure your team token.
 
       To let AI models use this tool, point them at:
         #{HOMEBREW_PREFIX}/bin/logKnowledge
