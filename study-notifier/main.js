@@ -933,24 +933,31 @@ function scheduleNext(overrideMinutes) {
 }
 
 async function fireNotification() {
-  // cardState is in-memory — no reload needed (db is write-through)
-  cards     = await loadCards()
-  invalidateCaches()
-  if (!cards.length) { scheduleNext(); return }
+  try {
+    // cardState is in-memory — no reload needed (db is write-through)
+    cards     = await loadCards()
+    invalidateCaches()
+    if (!cards.length) { console.log('[notify] no cards — skipping'); scheduleNext(); return }
 
-  sessionQueue = buildSessionQueue()
-  sessionDone  = 0
-  if (!sessionQueue.length) { scheduleNext(); return }
+    sessionQueue = buildSessionQueue()
+    sessionDone  = 0
+    if (!sessionQueue.length) { console.log('[notify] no due cards — skipping'); scheduleNext(); return }
 
-  notificationSession = true
-  currentCard = sessionQueue[0]
-  showPill(currentCard)
+    console.log(`[notify] firing session: ${sessionQueue.length} cards`)
+    notificationSession = true
+    currentCard = sessionQueue[0]
+    showPill(currentCard)
 
-  if (Notification.isSupported()) {
-    showStudyNotification(currentCard, sessionQueue.length)
+    if (Notification.isSupported()) {
+      showStudyNotification(currentCard, sessionQueue.length)
+    } else {
+      console.warn('[notify] Notification.isSupported() is false — macOS notifications disabled')
+    }
+  } catch (e) {
+    console.error('[notify] fireNotification failed:', e.message)
+  } finally {
+    scheduleNext()
   }
-
-  scheduleNext()
 }
 
 // ── IPC ───────────────────────────────────────────────────────────────────────
