@@ -1,6 +1,6 @@
 {
   "name": "study-notifier",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Spaced repetition notifier with liquid glass UI",
   "author": "Tanner Hornsby",
   "main": "main.js",
