@@ -27,6 +27,19 @@ if [ -d "$REPO_DIR/remote-mcp-server" ]; then
   echo "    Done"
 fi
 
+# ── Terraform tfvars (symlink from main repo) ─────────────────────────────────
+TFVARS_SRC="$HOME/research/infra/terraform.tfvars"
+TFVARS_DST="$REPO_DIR/infra/terraform.tfvars"
+if [ -f "$TFVARS_SRC" ] && [ ! -e "$TFVARS_DST" ]; then
+  echo "==> Symlinking terraform.tfvars from ~/research/infra/"
+  ln -s "$TFVARS_SRC" "$TFVARS_DST"
+  echo "    Done"
+elif [ -e "$TFVARS_DST" ]; then
+  echo "==> terraform.tfvars already exists, skipping"
+else
+  echo "==> Warning: ~/research/infra/terraform.tfvars not found, skipping"
+fi
+
 echo ""
 echo "==> Setup complete"
 echo ""
