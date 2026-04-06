@@ -4,13 +4,22 @@ import { bearerAuth } from 'hono/bearer-auth'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { PORT, TEAM_TOKEN } from './config.js'
 import { createMcpServer } from './mcp.js'
-import { initSchema } from './db.js'
+import { initSchema, setOnLogInsert } from './db.js'
+import { generateStudyCards } from './tools/generate-cards.js'
+import { indexAllCardEmbeddings } from './compute.js'
 import { api } from './routes.js'
 
 const app = new Hono()
 
 // Init DB schema on startup (idempotent)
 await initSchema()
+
+// Auto-generate cards whenever a new log is inserted
+setOnLogInsert(() => {
+  generateStudyCards()
+    .then(() => indexAllCardEmbeddings())
+    .catch(e => console.error('[auto] card generation failed:', e))
+})
 
 // Require TEAM_TOKEN in production
 if (!TEAM_TOKEN) {
