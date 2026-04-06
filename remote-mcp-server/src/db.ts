@@ -117,6 +117,11 @@ export async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_problem_logs_embedding ON problem_logs
       USING hnsw (embedding vector_cosine_ops);
   `)
+  // Fix NULLs from columns added after initial table creation
+  await pool.query(`
+    UPDATE problem_logs SET cards_generated = false WHERE cards_generated IS NULL;
+    ALTER TABLE problem_logs ALTER COLUMN cards_generated SET DEFAULT false;
+  `)
   console.log('[db] schema initialized')
 }
 
@@ -187,7 +192,7 @@ export async function upsertLog(
 export async function getUnprocessedLogs() {
   const { rows } = await pool.query(
     `SELECT id, filename, content, repo FROM problem_logs
-     WHERE merged_into IS NULL AND cards_generated = false
+     WHERE merged_into IS NULL AND cards_generated IS NOT TRUE
      ORDER BY date ASC`,
   )
   return rows

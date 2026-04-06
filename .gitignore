@@ -23,6 +23,10 @@ study-cards/.evaluation_log.json
 study-cards/.activity_log.json
 study-cards/.processed_logs.json
 
+# Terraform
+*.tfvars
+!*.tfvars.example
+
 # OS
 .DS_Store
 
