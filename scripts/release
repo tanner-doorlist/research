@@ -49,11 +49,12 @@ else
   git push origin "$TAG"
 fi
 
-# Create GitHub Release
+# Create GitHub Release (includes CLI script alongside DMGs)
 echo "==> Creating GitHub Release $TAG"
 gh release create "$TAG" \
   "study-notifier/$ARM64_DMG" \
   "study-notifier/$X64_DMG" \
+  "cli/logKnowledge" \
   --repo tanner-doorlist/research \
   --title "Study Notifier ${VERSION}" \
   --generate-notes
@@ -62,9 +63,12 @@ gh release create "$TAG" \
 SHA_ARM64=$(shasum -a 256 "study-notifier/$ARM64_DMG" | awk '{print $1}')
 SHA_X64=$(shasum -a 256 "study-notifier/$X64_DMG" | awk '{print $1}')
 
+SHA_CLI=$(shasum -a 256 "cli/logKnowledge" | awk '{print $1}')
+
 echo "==> SHA256 hashes:"
 echo "  arm64: $SHA_ARM64"
 echo "  x64:   $SHA_X64"
+echo "  cli:   $SHA_CLI"
 
 # Clone and update tap repo
 TAP_DIR=$(mktemp -d)
@@ -78,7 +82,9 @@ gh repo clone tanner-doorlist/homebrew-study-notifier "$TAP_DIR" 2>/dev/null || 
   exit 0
 }
 
-mkdir -p "$TAP_DIR/Casks"
+mkdir -p "$TAP_DIR/Casks" "$TAP_DIR/Formula"
+
+# Cask: Study Notifier Electron app (DMG)
 cat > "$TAP_DIR/Casks/study-notifier.rb" << CASKEOF
 cask "study-notifier" do
   version "${VERSION}"
@@ -105,6 +111,41 @@ cask "study-notifier" do
 end
 CASKEOF
 
+# Formula: logKnowledge CLI (standalone script)
+cat > "$TAP_DIR/Formula/log-knowledge.rb" << FORMULAEOF
+class LogKnowledge < Formula
+  desc "CLI for logging engineering knowledge to Knowledge Scribe"
+  homepage "https://github.com/tanner-doorlist/research"
+  url "https://github.com/tanner-doorlist/research/releases/download/v${VERSION}/logKnowledge"
+  sha256 "${SHA_CLI}"
+  version "${VERSION}"
+  license "MIT"
+
+  depends_on "curl"
+  depends_on "jq"
+
+  def install
+    bin.install "logKnowledge"
+  end
+
+  def caveats
+    <<~EOS
+      Run 'logKnowledge --setup' to configure your server URL and team token.
+
+      To let AI models use this tool, point them at:
+        #{HOMEBREW_PREFIX}/bin/logKnowledge
+
+      Or add to your Claude Code / Cursor MCP config and tell the model:
+        "Use logKnowledge CLI at #{HOMEBREW_PREFIX}/bin/logKnowledge to log insights."
+    EOS
+  end
+
+  test do
+    assert_match "logKnowledge", shell_output("#{bin}/logKnowledge --help")
+  end
+end
+FORMULAEOF
+
 cd "$TAP_DIR"
 git add -A
 git commit -m "Update study-notifier to ${VERSION}"
@@ -114,4 +155,6 @@ rm -rf "$TAP_DIR"
 
 echo ""
 echo "==> Released Study Notifier ${VERSION}"
-echo "    Install: brew install --cask tanner-doorlist/study-notifier/study-notifier"
+echo "    Install app:  brew install --cask tanner-doorlist/study-notifier/study-notifier"
+echo "    Install CLI:  brew install tanner-doorlist/study-notifier/log-knowledge"
+echo "    Then run:     logKnowledge --setup"

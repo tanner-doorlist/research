@@ -1,0 +1,269 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# logKnowledge — CLI for logging engineering knowledge to Knowledge Scribe
+#
+# AI MODELS: This tool logs knowledge entries to a remote knowledge base.
+# Call it after completing work on a ticket, fixing a bug, or learning
+# something non-obvious. The server deduplicates automatically.
+#
+# Usage:
+#   logKnowledge --ticket <id> --notes <text> [--tags <t1,t2>] [--repo <name>]
+#   logKnowledge --search <query> [--n <count>]
+#   logKnowledge --setup
+#   logKnowledge --help
+#
+# Examples:
+#   logKnowledge --ticket DLE-42 --notes "pgvector HNSW index requires 100+ rows before it kicks in. Below that it falls back to sequential scan." --tags "postgres,pgvector" --repo doorlite-next
+#   logKnowledge --search "pgvector indexing behavior"
+
+CONFIG_DIR="${HOME}/.config/knowledge-scribe"
+CONFIG_FILE="${CONFIG_DIR}/config"
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+load_config() {
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "No config found. Run: logKnowledge --setup" >&2
+    exit 1
+  fi
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+  [[ -n "${KNOWLEDGE_SCRIBE_URL:-}" ]] || die "KNOWLEDGE_SCRIBE_URL not set in $CONFIG_FILE"
+  [[ -n "${KNOWLEDGE_SCRIBE_TOKEN:-}" ]] || die "KNOWLEDGE_SCRIBE_TOKEN not set in $CONFIG_FILE"
+}
+
+# ── Setup ────────────────────────────────────────────────────────────────────
+
+do_setup() {
+  mkdir -p "$CONFIG_DIR"
+
+  echo "Knowledge Scribe CLI Setup"
+  echo "=========================="
+  echo ""
+
+  local url token
+
+  if [[ -f "$CONFIG_FILE" ]]; then
+    # shellcheck source=/dev/null
+    source "$CONFIG_FILE"
+    echo "Current config: ${KNOWLEDGE_SCRIBE_URL:-<not set>}"
+    echo ""
+  fi
+
+  read -rp "Server URL (e.g. https://scribe-xxxxxxxxxx-uc.a.run.app): " url
+  [[ -n "$url" ]] || die "URL is required"
+  # Strip trailing slash
+  url="${url%/}"
+
+  read -rp "Team token: " token
+  [[ -n "$token" ]] || die "Token is required"
+
+  cat > "$CONFIG_FILE" << EOF
+# Knowledge Scribe CLI config
+KNOWLEDGE_SCRIBE_URL="${url}"
+KNOWLEDGE_SCRIBE_TOKEN="${token}"
+EOF
+
+  chmod 600 "$CONFIG_FILE"
+  echo ""
+  echo "Config saved to ${CONFIG_FILE}"
+
+  # Verify connection
+  echo "Verifying connection..."
+  local status
+  status=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${token}" \
+    "${url}/api/health" 2>/dev/null) || true
+
+  if [[ "$status" == "200" ]]; then
+    echo "Connected successfully."
+  else
+    echo "WARNING: Could not reach server (HTTP ${status:-timeout}). Check URL and token."
+  fi
+}
+
+# ── Log Knowledge ────────────────────────────────────────────────────────────
+
+do_log() {
+  local ticket="" notes="" tags="" repo=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --ticket|-t)  ticket="$2"; shift 2 ;;
+      --notes|-n)   notes="$2"; shift 2 ;;
+      --tags)       tags="$2"; shift 2 ;;
+      --repo|-r)    repo="$2"; shift 2 ;;
+      *) die "Unknown flag: $1. Run: logKnowledge --help" ;;
+    esac
+  done
+
+  [[ -n "$ticket" ]] || die "Missing --ticket. Usage: logKnowledge --ticket <id> --notes <text>"
+  [[ -n "$notes" ]]  || die "Missing --notes. Usage: logKnowledge --ticket <id> --notes <text>"
+
+  load_config
+
+  # Build JSON payload
+  local json
+  json=$(jq -n \
+    --arg ticket_id "$ticket" \
+    --arg raw_notes "$notes" \
+    --arg tags "$tags" \
+    --arg repo "$repo" \
+    '{
+      ticket_id: $ticket_id,
+      raw_notes: $raw_notes,
+      tags: (if $tags == "" then [] else ($tags | split(",") | map(gsub("^\\s+|\\s+$"; ""))) end),
+      repo: (if $repo == "" then null else $repo end)
+    }')
+
+  local response
+  response=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer ${KNOWLEDGE_SCRIBE_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$json" \
+    "${KNOWLEDGE_SCRIBE_URL}/api/log")
+
+  local http_code body
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+    echo "$body" | jq -r '.result // .'
+  else
+    die "Server returned HTTP ${http_code}: ${body}"
+  fi
+}
+
+# ── Search Knowledge ─────────────────────────────────────────────────────────
+
+do_search() {
+  local query="" n=3
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --search|-s) query="$2"; shift 2 ;;
+      --n)         n="$2"; shift 2 ;;
+      *) die "Unknown flag: $1" ;;
+    esac
+  done
+
+  [[ -n "$query" ]] || die "Missing search query. Usage: logKnowledge --search <query>"
+
+  load_config
+
+  local json
+  json=$(jq -n --arg q "$query" --argjson n "$n" '{query: $q, n: $n}')
+
+  local response
+  response=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    -H "Authorization: Bearer ${KNOWLEDGE_SCRIBE_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -d "$json" \
+    "${KNOWLEDGE_SCRIBE_URL}/api/search")
+
+  local http_code body
+  http_code=$(echo "$response" | tail -1)
+  body=$(echo "$response" | sed '$d')
+
+  if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+    echo "$body" | jq -r '.result // .'
+  else
+    die "Server returned HTTP ${http_code}: ${body}"
+  fi
+}
+
+# ── Help ─────────────────────────────────────────────────────────────────────
+
+show_help() {
+  cat << 'HELPEOF'
+logKnowledge — Log engineering knowledge to Knowledge Scribe
+
+USAGE
+  logKnowledge --ticket <id> --notes <text> [--tags <t1,t2>] [--repo <name>]
+  logKnowledge --search <query> [--n <count>]
+  logKnowledge --setup
+  logKnowledge --help
+
+COMMANDS
+  --setup           Configure server URL and authentication token
+  --help            Show this help message
+
+LOG KNOWLEDGE
+  --ticket, -t      Ticket or context ID (e.g. "DLE-42", "ad-hoc", "onboarding")
+  --notes, -n       Raw notes — what you did, why, what broke, what worked.
+                    Be verbose. The server formats and deduplicates automatically.
+  --tags            Comma-separated topic tags (e.g. "postgres,migrations,pgvector")
+  --repo, -r        Repository name or URL. Used to scope knowledge per-repo.
+
+SEARCH
+  --search, -s      Natural language search query over all logged knowledge
+  --n               Number of results (default: 3)
+
+FOR AI MODELS
+  This CLI is designed to be called by AI coding assistants (Claude, Cursor,
+  Copilot, etc.) to capture engineering knowledge as you work. After completing
+  a task, debugging a tricky issue, or learning something non-obvious, call
+  this tool to log the insight.
+
+  What to log:
+    - Bug fixes: what the symptoms were, root cause, and the fix
+    - Non-obvious behavior: things that surprised you or weren't documented
+    - Architecture decisions: why you chose approach A over B
+    - Performance discoveries: what was slow and why
+    - Integration gotchas: API quirks, config pitfalls, version issues
+
+  What NOT to log:
+    - Routine code changes with no learning value
+    - Things already well-documented in official docs
+    - Temporary debugging notes
+
+  The --notes field should be verbose raw text. The server uses Claude to
+  format it into structured knowledge entries with frontmatter, key insights,
+  solution steps, and pitfalls. Duplicate/overlapping entries are automatically
+  detected and merged (cosine similarity >= 0.88).
+
+EXAMPLES
+  # Log a debugging insight
+  logKnowledge --ticket DLE-42 \
+    --notes "pgvector HNSW index needs 100+ rows to activate. Below that
+    threshold Postgres falls back to sequential scan, which made our test
+    suite appear broken. Fixed by seeding enough test vectors." \
+    --tags "postgres,pgvector,testing" \
+    --repo doorlite-next
+
+  # Log without a specific ticket
+  logKnowledge --ticket ad-hoc \
+    --notes "Electron IPC calls from renderer must go through preload.js
+    contextBridge. Direct require('electron') in renderer crashes with
+    sandboxing enabled." \
+    --tags "electron,ipc"
+
+  # Search existing knowledge
+  logKnowledge --search "pgvector index behavior"
+
+CONFIG
+  Server URL and token are stored in ~/.config/knowledge-scribe/config
+  Run 'logKnowledge --setup' to configure.
+HELPEOF
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+if [[ $# -eq 0 ]]; then
+  show_help
+  exit 0
+fi
+
+case "$1" in
+  --setup)    do_setup ;;
+  --help|-h)  show_help ;;
+  --search|-s) do_search "$@" ;;
+  --ticket|-t) do_log "$@" ;;
+  --notes|-n)  do_log "$@" ;;
+  *)           die "Unknown command: $1. Run: logKnowledge --help" ;;
+esac

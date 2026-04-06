@@ -35,6 +35,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -42,7 +43,9 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.dmg
+          files: |
+            artifacts/*.dmg
+            cli/logKnowledge
           generate_release_notes: true
 
   update-tap:
@@ -50,19 +53,25 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: tanner-doorlist/homebrew-study-notifier
           token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
-      - name: Update Cask formula
+      - name: Update Cask and Formula
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           SHA_ARM64=$(shasum -a 256 artifacts/*arm64*.dmg | awk '{print $1}')
           SHA_X64=$(shasum -a 256 artifacts/*x64*.dmg | awk '{print $1}')
+          SHA_CLI=$(shasum -a 256 cli/logKnowledge | awk '{print $1}')
 
+          cd tap
+
+          # Cask: Study Notifier Electron app
           mkdir -p Casks
           cat > Casks/study-notifier.rb << CASKEOF
           cask "study-notifier" do
@@ -90,8 +99,41 @@ jobs:
           end
           CASKEOF
 
+          # Formula: logKnowledge CLI
+          mkdir -p Formula
+          cat > Formula/log-knowledge.rb << FORMULAEOF
+          class LogKnowledge < Formula
+            desc "CLI for logging engineering knowledge to Knowledge Scribe"
+            homepage "https://github.com/tanner-doorlist/research"
+            url "https://github.com/tanner-doorlist/research/releases/download/v${VERSION}/logKnowledge"
+            sha256 "${SHA_CLI}"
+            version "${VERSION}"
+            license "MIT"
+
+            depends_on "curl"
+            depends_on "jq"
+
+            def install
+              bin.install "logKnowledge"
+            end
+
+            def caveats
+              <<~EOS
+                Run 'logKnowledge --setup' to configure your server URL and team token.
+
+                To let AI models use this tool, point them at:
+                  #{HOMEBREW_PREFIX}/bin/logKnowledge
+              EOS
+            end
+
+            test do
+              assert_match "logKnowledge", shell_output("#{bin}/logKnowledge --help")
+            end
+          end
+          FORMULAEOF
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/study-notifier.rb
+          git add Casks/study-notifier.rb Formula/log-knowledge.rb
           git commit -m "Update study-notifier to ${VERSION}"
           git push
